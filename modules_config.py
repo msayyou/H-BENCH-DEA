@@ -94,10 +94,15 @@ MODULES: dict[str, dict] = {
         "orientation": "input",
         "model": "BCC",
         "inputs": {
+            "opex_total": {
+                "label": "Charges opérationnelles totales (proxy USALI)",
+                "unit": "€",
+                "required": False,
+            },
             "rooms_cost": {
                 "label": "Coûts dept. Hébergement",
                 "unit": "€",
-                "required": True,
+                "required": False,
             },
             "fb_cost": {
                 "label": "Coûts dept. F&B",
@@ -159,15 +164,15 @@ MODULES: dict[str, dict] = {
         "orientation": "output",
         "model": "CCR",
         "inputs": {
-            "book_value_assets": {
-                "label": "Valeur comptable des actifs",
-                "unit": "€",
-                "required": True,
-            },
             "nb_rooms": {
                 "label": "Capacité (chambres)",
                 "unit": "unité",
-                "required": True,
+                "required": False,
+            },
+            "book_value_assets": {
+                "label": "Valeur comptable des actifs",
+                "unit": "€",
+                "required": False,
             },
             "surface_m2": {
                 "label": "Surface exploitée (m²)",
@@ -277,10 +282,20 @@ MODULES: dict[str, dict] = {
         "orientation": "output",
         "model": "BCC",
         "inputs": {
+            "opex_total": {
+                "label": "Charges opérationnelles (proxy coût distribution)",
+                "unit": "€",
+                "required": False,
+            },
+            "nb_rooms": {
+                "label": "Capacité (chambres) — proxy exposition marché",
+                "unit": "unité",
+                "required": False,
+            },
             "marketing_cost": {
                 "label": "Dépenses marketing & distribution",
                 "unit": "€",
-                "required": True,
+                "required": False,
             },
             "ota_gds_cost": {
                 "label": "Coûts canaux (OTA, GDS, commissions)",
@@ -362,7 +377,12 @@ MODULES: dict[str, dict] = {
             "total_revenue": {
                 "label": "Chiffre d'affaires total [désirable]",
                 "unit": "€",
-                "required": True,
+                "required": False,
+            },
+            "revpar": {
+                "label": "RevPAR [proxy intensité revenus]",
+                "unit": "€",
+                "required": False,
             },
             "gop": {
                 "label": "GOP [désirable]",
@@ -534,7 +554,10 @@ def check_module_feasibility(module_id: str, available_cols: list[str]) -> dict:
     ]
     coverage = len(available) / len(all_expected) if all_expected else 0.0
     return {
-        "feasible": len(missing_req) == 0,
+        "feasible": (
+            len([c for c in m["inputs"]  if c in available_cols]) >= 1 and
+            len([c for c in m["outputs"] if c in available_cols]) >= 1
+        ),
         "missing_required": missing_req,
         "available_inputs": [c for c in m["inputs"] if c in available_cols],
         "available_outputs": [c for c in m["outputs"] if c in available_cols],
