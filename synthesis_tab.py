@@ -20,7 +20,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 
 from modules_config import MODULES, get_col_label
-from dea_model import(
+from dea_model import (
     build_cross_synthesis,
     get_module_ranking,
     get_dmu_weaknesses,
@@ -327,17 +327,21 @@ def render_synthesis_tab(
     show_cols = ["Hôtel"] + list(rename_map.values()) + ["Score moyen", "Modules efficients", "profil"]
     show_cols = [c for c in show_cols if c in display_df.columns]
 
-    # Formatage scores en %
-    styled = display_df[show_cols].style.format(
-        {v: lambda x: f"{x:.1%}" if pd.notna(x) and isinstance(x, float) else x
-         for v in rename_map.values()},
-        na_rep="—"
-    ).background_gradient(
-        subset=list(rename_map.values()),
-        cmap="RdYlGn",
-        vmin=0,
-        vmax=1,
-    )
+    # Formatage scores — sans background_gradient (évite dépendance matplotlib)
+    def _color_score(val):
+        if not isinstance(val, float) or pd.isna(val):
+            return ""
+        if val >= 0.999: return "background-color: #1e8449; color: white; font-weight: 700"
+        if val >= 0.85:  return "background-color: #27ae60; color: white"
+        if val >= 0.70:  return "background-color: #f39c12; color: white"
+        return "background-color: #e74c3c; color: white"
+
+    score_cols_present = [c for c in rename_map.values() if c in display_df.columns]
+    fmt_map = {v: (lambda x: f"{x:.1%}" if pd.notna(x) and isinstance(x, float) else ("—" if not x else x))
+               for v in score_cols_present}
+    styled = display_df[show_cols].style.format(fmt_map, na_rep="—")
+    if score_cols_present:
+        styled = styled.map(_color_score, subset=score_cols_present)
 
     st.dataframe(styled, use_container_width=True, height=min(600, n_dmus * 38 + 60))
 
