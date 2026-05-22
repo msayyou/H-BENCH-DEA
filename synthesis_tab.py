@@ -20,7 +20,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 
 from modules_config import MODULES, get_col_label
-from dea_multi_module import (
+from dea_model import(
     build_cross_synthesis,
     get_module_ranking,
     get_dmu_weaknesses,
