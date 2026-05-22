@@ -977,6 +977,95 @@ with tab9:
     upside_df = upside_df.sort_values('_sort', ascending=False, na_position='last').drop(columns=['_sort'])
     st.dataframe(upside_df, use_container_width=True, hide_index=True)
 
+
+    # ── DEA Capital vs DEA Opérationnel ─────────────────────────────────
+    st.markdown('<p class="section-title">DEA Capital vs DEA Opérationnel</p>', unsafe_allow_html=True)
+    st.caption(
+        "Score opérationnel (BCC) = efficience de gestion. "
+        "Score capital (DEA sur surface + CAPEX → GOP + CA) = efficience du capital immobilisé. "
+        "Au-dessus de la diagonale : capital bien employé. "
+        "En dessous : surcoût immobilier ou CAPEX mal alloué — signal de renégociation de bail ou révision plan CAPEX."
+    )
+
+    # Préparer les données capital depuis cap_input
+    _has_cap_data = (cap_input[['surface_m2','capex_annuel (k€)']].sum().sum() > 0)
+
+    if not _has_cap_data:
+        st.info("Renseigner **surface_m2** et **capex_annuel** dans le tableau ci-dessus pour activer le DEA Capital.")
+    else:
+        # Construire un df temporaire pour compute_capital_dea
+        _cap_df = dea.df.copy()
+        for _hotel in dea.hotels:
+            _row_cap = cap_input.loc[_hotel]
+            if _row_cap['surface_m2'] > 0:
+                _cap_df.loc[_hotel, 'surface_m2'] = _row_cap['surface_m2']
+            if _row_cap['capex_annuel (k€)'] > 0:
+                _cap_df.loc[_hotel, 'capex_annuel'] = _row_cap['capex_annuel (k€)'] * 1000
+            if _row_cap['gop (k€)'] > 0:
+                _cap_df.loc[_hotel, 'gop'] = _row_cap['gop (k€)'] * 1000
+
+        # Mettre à jour dea.df temporairement pour compute_capital_dea
+        _dea_df_orig = dea.df.copy()
+        dea.df = _cap_df
+        dea.has_surface = 'surface_m2' in _cap_df.columns and _cap_df['surface_m2'].sum() > 0
+        dea.has_capex   = 'capex_annuel' in _cap_df.columns and _cap_df['capex_annuel'].sum() > 0
+        dea.has_gop     = 'gop' in _cap_df.columns and _cap_df['gop'].sum() > 0
+
+        _cap_dea_df = dea.compute_capital_dea()
+        dea.df = _dea_df_orig  # restaurer
+
+        if _cap_dea_df is not None and not _cap_dea_df.empty:
+            st.dataframe(_cap_dea_df, use_container_width=True, hide_index=True)
+
+            # Scatter : DEA Opérationnel vs DEA Capital
+            _op_vals  = [dea.bcc_scores.get(h, 0) for h in _cap_dea_df['Hôtel']]
+            _cap_vals = [float(str(v).replace('%',''))/100 if isinstance(v, str) else v
+                         for v in _cap_dea_df['DEA Capital']]
+
+            fig_dea_cap = go.Figure()
+            for i, h in enumerate(_cap_dea_df['Hôtel']):
+                _op  = _op_vals[i]
+                _cap = _cap_vals[i] if isinstance(_cap_vals[i], float) else 0.0
+                _lecture = str(_cap_dea_df.iloc[i]['Lecture'])
+                _color = ('#27ae60' if 'bien' in _lecture
+                          else '#f39c12' if 'modéré' in _lecture
+                          else '#e74c3c')
+                fig_dea_cap.add_trace(go.Scatter(
+                    x=[_op], y=[_cap],
+                    mode='markers+text', text=[h],
+                    textposition='top center', textfont=dict(size=8),
+                    marker=dict(size=11, color=_color, opacity=0.85),
+                    showlegend=False,
+                    hovertemplate=f"<b>{h}</b><br>DEA Opérationnel : {_op:.1%}<br>DEA Capital : {_cap:.1%}<br>{_lecture}<extra></extra>",
+                ))
+
+            # Diagonale
+            fig_dea_cap.add_shape(type='line', x0=0.3, y0=0.3, x1=1.0, y1=1.0,
+                                  line=dict(dash='dash', color='gray', width=1))
+            fig_dea_cap.add_annotation(x=0.95, y=0.97, text="Au-dessus = capital bien employé",
+                                       showarrow=False, font=dict(size=9, color='#27ae60'))
+            fig_dea_cap.add_annotation(x=0.95, y=0.60, text="En dessous = surcoût capital",
+                                       showarrow=False, font=dict(size=9, color='#e74c3c'))
+
+            fig_dea_cap.update_layout(
+                title="DEA Capital vs DEA Opérationnel — Efficience immobilière",
+                xaxis=dict(title="DEA Opérationnel (BCC)", range=[0.3, 1.08], tickformat='.0%'),
+                yaxis=dict(title="DEA Capital", range=[0.3, 1.08], tickformat='.0%'),
+                height=480, paper_bgcolor='rgba(0,0,0,0)',
+            )
+            st.plotly_chart(fig_dea_cap, use_container_width=True)
+
+            # Alertes
+            _critiques = _cap_dea_df[_cap_dea_df['Lecture'].str.contains('sous-productif', na=False)]
+            if not _critiques.empty:
+                st.error(
+                    f"**Capital sous-productif détecté :** "
+                    + ", ".join(_critiques['Hôtel'].tolist())
+                    + " — Signal de renégociation de bail ou révision du plan CAPEX."
+                )
+        else:
+            st.info("Données capital insuffisantes pour le calcul DEA Capital (surface + CAPEX + revenus requis).")
+
     # Expense Flex (Russo & Legel p.33)
     st.markdown('<p class="section-title">Expense Flex & Flow Through</p>', unsafe_allow_html=True)
     st.caption('Flow Through = delta_GOP / delta_CA | Expense Flex = 1 - FT quand CA baisse | Cible standard 50%')
