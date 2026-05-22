@@ -226,6 +226,19 @@ if "revpar" in _df_mm.columns and "nb_rooms" in _df_mm.columns:
 if "total_revenue" not in _df_mm.columns and "rooms_revenue" in _df_mm.columns:
     _df_mm["total_revenue"] = _df_mm["rooms_revenue"]
 
+# Injecter les colonnes calculees dans dea.df si analyse deja lancee
+# pour que les onglets STR / Capital utilisent les vraies valeurs
+if 'dea' in st.session_state:
+    for _inject_col in ['adr', 'total_revenue', 'trevpar', 'revenue_per_fte', 'rooms_revenue']:
+        if _inject_col in _df_mm.columns and _inject_col not in st.session_state['dea'].df.columns:
+            _mm_vals = _df_mm.set_index('hotel_name')[_inject_col]
+            try:
+                st.session_state['dea'].df[_inject_col] = [
+                    _mm_vals.get(h, np.nan) for h in st.session_state['dea'].hotels
+                ]
+            except Exception:
+                pass
+
 _available_mm = [c for c in _df_mm.columns if c != "hotel_name"]
 
 # Sélecteur sidebar
@@ -631,7 +644,7 @@ with tab6:
             val_rev_h   = s_rev * nights_h
 
             par_por_rows.append({
-                'Hotel'                    : h,
+                'Hôtel'                    : h,
                 'BCC'                      : f"{dea.bcc_scores[h]:.1%}",
                 'Slack ETP (nb)'           : round(s_emp, 1) if s_emp > 0 else '--',
                 'ETP PAR (e/ch dispo)'     : round(val_emp_eur / par_h, 2) if par_h > 0 and s_emp > 0 else '--',
@@ -976,7 +989,7 @@ with tab9:
 
     flex_rows = []
     for r in cap_rows:
-        hotel_ft = r['Hotel']
+        hotel_ft = r['Hôtel']
         stars_ft = int(cap_input.loc[hotel_ft, 'classement (★)'])
         ft_bench_ft = FT_BENCH.get(stars_ft, FT_DEFAULT)
         lits_ft  = float(dea.df.loc[hotel_ft, 'nb_lits'])
@@ -986,7 +999,7 @@ with tab9:
         if base_revpar_ft > 0 and base_gop_pct_ft > 0:
             ca_base_ft  = base_revpar_ft * lits_ft * 365
             gop_base_ft = ca_base_ft * base_gop_pct_ft / 100
-            gop_h_ft = cap_input.loc[hotel_ft, 'gop (k€)'] * 1000 if cap_input.loc[hotel_ft, 'gop (k€)'] > 0 else None
+            gop_h_ft = (float(cap_input.loc[hotel_ft, 'gop (k€)']) * 1000 if 'gop (k€)' in cap_input.columns and float(cap_input.loc[hotel_ft, 'gop (k€)']) > 0 else None)
             delta_ca_ft  = ca_ft - ca_base_ft
             if gop_h_ft is not None and abs(delta_ca_ft) > 0:
                 ft_val = round((gop_h_ft - gop_base_ft) / delta_ca_ft, 3)
@@ -1007,7 +1020,7 @@ with tab9:
         else: ftq = '--'
 
         flex_rows.append({
-            'Hotel'          : hotel_ft,
+            'Hôtel'          : hotel_ft,
             'BCC'            : f"{dea.bcc_scores.get(hotel_ft,0):.1%}",
             'Classement'     : '★' * stars_ft,
             'Flow Through %' : f"{ft_val:.1%}" if isinstance(ft_val, float) else '--',
@@ -1046,9 +1059,15 @@ with tab10:
             occ = float(dea.df.loc[hotel, 'taux_occupation'])
             row['OCC (%)'] = occ; row['MPI'] = round(occ / mkt_occ * 100, 1)
             row['Signal MPI'] = ('🟢 Leader' if row['MPI'] >= 110 else '🟡 Marché' if row['MPI'] >= 90 else '🔴 Sous')
-        if mkt_adr > 0 and 'adr' in dea.df.columns:
-            adr = float(dea.df.loc[hotel, 'adr'])
-            row['ADR (€)'] = adr; row['ARI'] = round(adr / mkt_adr * 100, 1)
+        # ADR : RevPAR/TO par defaut, colonne explicite si dispo
+        _occ_s = float(dea.df.loc[hotel, 'taux_occupation']) / 100
+        _rvp_s = float(dea.df.loc[hotel, 'revpar'])
+        _adr_s = float(dea.df.loc[hotel, 'adr']) if 'adr' in dea.df.columns else (_rvp_s / _occ_s if _occ_s > 0 else 0.0)
+        row['ADR (€)'] = round(_adr_s, 2)
+        if mkt_adr > 0 and _adr_s > 0:
+            row['ARI'] = round(_adr_s / mkt_adr * 100, 1)
+            row['Signal ARI'] = ('🟢 Leader' if row['ARI'] >= 110
+                                 else '🟡 Marche' if row['ARI'] >= 90 else '🔴 Sous')
         str_rows.append(row)
 
     str_df = pd.DataFrame(str_rows).sort_values('RGI', ascending=False)
@@ -1078,7 +1097,7 @@ with tab10:
             sub_i = str_df.dropna(subset=[icol]).sort_values(icol)
             if sub_i.empty: continue
             fig_i = go.Figure(go.Bar(
-                x=sub_i[icol], y=sub_i['Hotel'], orientation='h',
+                x=sub_i[icol], y=sub_i['Hôtel'], orientation='h',
                 marker=dict(color=sub_i[icol], colorscale='RdYlGn', cmin=70, cmax=140,
                             showscale=True, colorbar=dict(title=icol)),
                 text=[f"{v:.0f}" for v in sub_i[icol]], textposition='outside',
@@ -1096,7 +1115,7 @@ with tab10:
     st.caption('Valider que les DMUs sont comparables avant interpretation DEA. RGI doit rester entre 80 et 130% pour valider le compset.')
 
     _compset_init = pd.DataFrame({
-        'Hotel'           : dea.hotels,
+        'Hôtel'           : dea.hotels,
         'Nb chambres'     : [int(dea.df.loc[h, 'nb_lits']) for h in dea.hotels],
         'Annee ouv.'      : [0]*dea.n,
         'Dern. renov.'    : [0]*dea.n,
@@ -1105,8 +1124,8 @@ with tab10:
         'Meeting (m2)'    : [0]*dea.n,
         'Localisation'    : ['Centre-ville']*dea.n,
         'Gestion'         : ['3rd party']*dea.n,
-    }).set_index('Hotel')
-    if 'compset_profile' not in st.session_state or set(st.session_state['compset_profile'].index) != set(dea.hotels):
+    }).set_index('Hôtel')
+    if 'compset_profile' not in st.session_state or set(st.session_state.get('compset_profile', pd.DataFrame()).index) != set(dea.hotels):
         st.session_state['compset_profile'] = _compset_init
 
     _cs = st.data_editor(
