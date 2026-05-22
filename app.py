@@ -920,7 +920,9 @@ with tab9:
             'Priorité': ('🔴 Urgent' if up_gop>1.5 else '🟡 Moyen' if up_gop>0.5
                          else '✅ RAS' if up_gop==0 else '🟢 Faible'),
         })
-    upside_df = pd.DataFrame(upside_rows).sort_values('Upside GOP /FT (M€)', ascending=False)
+    upside_df = pd.DataFrame(upside_rows)
+    upside_df['_sort'] = pd.to_numeric(upside_df['Upside GOP /FT (M€)'], errors='coerce')
+    upside_df = upside_df.sort_values('_sort', ascending=False, na_position='last').drop(columns=['_sort'])
     st.dataframe(upside_df, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════
