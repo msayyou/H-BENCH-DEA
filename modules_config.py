@@ -52,8 +52,8 @@ MODULES: dict[str, dict] = {
             },
         },
         "outputs": {
-            "total_revenue": {
-                "label": "Chiffre d'affaires total",
+            "revpar": {
+                "label": "RevPAR (€/chambre dispo.)",
                 "unit": "€",
                 "required": True,
             },
@@ -61,6 +61,11 @@ MODULES: dict[str, dict] = {
                 "label": "Taux d'occupation (%)",
                 "unit": "%",
                 "required": True,
+            },
+            "total_revenue": {
+                "label": "Chiffre d'affaires total",
+                "unit": "€",
+                "required": False,
             },
             "gop": {
                 "label": "GOP (Gross Operating Profit)",
@@ -213,15 +218,15 @@ MODULES: dict[str, dict] = {
         "orientation": "input",
         "model": "BCC",
         "inputs": {
-            "payroll_total": {
-                "label": "Masse salariale totale",
-                "unit": "€",
-                "required": True,
-            },
             "fte_total": {
                 "label": "Effectifs totaux (ETP)",
                 "unit": "ETP",
                 "required": True,
+            },
+            "payroll_total": {
+                "label": "Masse salariale totale",
+                "unit": "€",
+                "required": False,
             },
             "hours_worked": {
                 "label": "Heures travaillées",
@@ -404,10 +409,15 @@ MODULES: dict[str, dict] = {
         "orientation": "output",
         "model": "BCC",
         "inputs": {
+            "opex_total": {
+                "label": "Charges opérationnelles (proxy investissement qualité)",
+                "unit": "€",
+                "required": False,
+            },
             "maintenance_cost": {
                 "label": "Coûts maintenance & rénovation",
                 "unit": "€",
-                "required": True,
+                "required": False,
             },
             "fb_cost": {
                 "label": "Coûts F&B",
@@ -431,10 +441,15 @@ MODULES: dict[str, dict] = {
                 "unit": "score",
                 "required": True,
             },
-            "adr": {
-                "label": "ADR (proxy qualité perçue)",
+            "revpar": {
+                "label": "RevPAR (proxy qualité perçue & pricing power)",
                 "unit": "€",
                 "required": True,
+            },
+            "adr": {
+                "label": "ADR",
+                "unit": "€",
+                "required": False,
             },
             "repeat_guest_rate": {
                 "label": "Taux de retour clientèle (%)",
