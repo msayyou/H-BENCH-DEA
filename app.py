@@ -1,5 +1,5 @@
 """
-app.py — DEA-H v3.2
+app.py — DEA-H v3.3
 Application Streamlit : Analyse DEA BCC/CCR pour Asset Management Hôtelier
 11 onglets : Board | KPIs | TOPSIS | K-means | Quadrants | Slacks | Fiche Actif
            | Metafrontière | Capital & Flow Through | Benchmark Marché
@@ -321,7 +321,7 @@ st.markdown("---")
 # ─────────────────────────────────────────────
 #  11 ONGLETS
 # ─────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
     "📋 Rapport Board",
     "📈 Dashboard KPIs",
     "🏆 Classement TOPSIS",
@@ -332,7 +332,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     "🌐 Metafrontière",
     "💰 Capital & Flow Through",
     "📊 Benchmark Marché",
-    "🔀 Synthèse Multi-Module",
+    "🔀 Synthese Multi-Module",
+    "📊 Variance Budget",
 ])
 
 # ══════════════════════════════════════════════
@@ -609,6 +610,44 @@ with tab6:
                 'Upside RevPAR (M€/an)': upside_rev,
             })
         st.dataframe(pd.DataFrame(upside_data), use_container_width=True, hide_index=True)
+
+        # PAR / POR / % CA sur les slacks (Russo & Legel, Exhibit 3)
+        st.markdown('<p class="section-title">Slacks en metriques USALI (PAR / POR / % CA)</p>', unsafe_allow_html=True)
+        st.caption('PAR = Per Available Room-Night | POR = Per Occupied Room | % CA = % Chiffre Affaires total')
+
+        par_por_rows = []
+        for h in hotels_inefficient:
+            lits_h   = float(dea.df.loc[h, 'nb_lits'])
+            revpar_h = float(dea.df.loc[h, 'revpar'])
+            occ_h    = float(dea.df.loc[h, 'taux_occupation']) / 100
+            nights_h = lits_h * 365 * occ_h
+            ca_h     = revpar_h * lits_h * 365
+            par_h    = lits_h * 365
+
+            s_emp  = dea.slacks[h]['inputs'].get('nb_employes', 0)
+            s_cost = dea.slacks[h]['inputs'].get('couts_op_ex', 0) * 1_000_000
+            s_rev  = dea.slacks[h]['outputs'].get('revpar', 0)
+            val_emp_eur = s_emp * avg_salary
+            val_rev_h   = s_rev * nights_h
+
+            par_por_rows.append({
+                'Hotel'                    : h,
+                'BCC'                      : f"{dea.bcc_scores[h]:.1%}",
+                'Slack ETP (nb)'           : round(s_emp, 1) if s_emp > 0 else '--',
+                'ETP PAR (e/ch dispo)'     : round(val_emp_eur / par_h, 2) if par_h > 0 and s_emp > 0 else '--',
+                'ETP % CA'                 : f"{val_emp_eur / ca_h * 100:.1f}%" if ca_h > 0 and s_emp > 0 else '--',
+                'Couts Op PAR (e)'         : round(s_cost / par_h, 2) if par_h > 0 and s_cost > 0 else '--',
+                'Couts Op % CA'            : f"{s_cost / ca_h * 100:.1f}%" if ca_h > 0 and s_cost > 0 else '--',
+                'Slack RevPAR POR (e/nuit)': round(s_rev, 2) if s_rev > 0 else '--',
+                'Upside Rev brut (ke)'     : round(val_rev_h / 1000, 1) if val_rev_h > 0 else '--',
+            })
+
+        if par_por_rows:
+            st.dataframe(pd.DataFrame(par_por_rows), use_container_width=True, hide_index=True)
+            c1p, c2p, c3p = st.columns(3)
+            c1p.info('**PAR** charges fixes, A&G, Maintenance, Utilities')
+            c2p.info('**POR** Rooms dept, F&B, couts variables')
+            c3p.info('**% CA** Management fees, Marketing, Franchise')
 
 # ══════════════════════════════════════════════
 # TAB 7 — FICHE ACTIF DRILL-DOWN
@@ -925,6 +964,64 @@ with tab9:
     upside_df = upside_df.sort_values('_sort', ascending=False, na_position='last').drop(columns=['_sort'])
     st.dataframe(upside_df, use_container_width=True, hide_index=True)
 
+    # Expense Flex (Russo & Legel p.33)
+    st.markdown('<p class="section-title">Expense Flex & Flow Through</p>', unsafe_allow_html=True)
+    st.caption('Flow Through = delta_GOP / delta_CA | Expense Flex = 1 - FT quand CA baisse | Cible standard 50%')
+
+    col_fx1, col_fx2 = st.columns(2)
+    with col_fx1:
+        base_revpar_ft = st.number_input('RevPAR baseline N-1 ou Budget (e)', value=0.0, step=1.0, key='ft_revpar')
+    with col_fx2:
+        base_gop_pct_ft = st.number_input('Marge GOP% baseline (%)', value=35.0, step=0.5, key='ft_gop')
+
+    flex_rows = []
+    for r in cap_rows:
+        hotel_ft = r['Hotel']
+        stars_ft = int(cap_input.loc[hotel_ft, 'classement (★)'])
+        ft_bench_ft = FT_BENCH.get(stars_ft, FT_DEFAULT)
+        lits_ft  = float(dea.df.loc[hotel_ft, 'nb_lits'])
+        revpar_ft = float(dea.df.loc[hotel_ft, 'revpar'])
+        ca_ft    = revpar_ft * lits_ft * 365
+
+        if base_revpar_ft > 0 and base_gop_pct_ft > 0:
+            ca_base_ft  = base_revpar_ft * lits_ft * 365
+            gop_base_ft = ca_base_ft * base_gop_pct_ft / 100
+            gop_h_ft = cap_input.loc[hotel_ft, 'gop (k€)'] * 1000 if cap_input.loc[hotel_ft, 'gop (k€)'] > 0 else None
+            delta_ca_ft  = ca_ft - ca_base_ft
+            if gop_h_ft is not None and abs(delta_ca_ft) > 0:
+                ft_val = round((gop_h_ft - gop_base_ft) / delta_ca_ft, 3)
+                flex_val = round(1 - ft_val, 3) if delta_ca_ft < 0 else None
+                src = 'Calcule'
+            else:
+                ft_val = ft_bench_ft; flex_val = None; src = 'Benchmark'
+        else:
+            ft_val = ft_bench_ft; flex_val = None; src = 'Benchmark'
+
+        slack_r_ft = dea.slacks.get(hotel_ft, {}).get('outputs', {}).get('revpar', 0)
+        driver_ft = 'Rate-driven' if slack_r_ft > 0 else 'Volume-driven'
+        if isinstance(ft_val, float):
+            if ft_val >= 0.60: ftq = '✅ Excellent'
+            elif ft_val >= 0.45: ftq = '🟡 Correct'
+            elif ft_val >= 0.30: ftq = '🟠 Faible'
+            else: ftq = '🔴 Tres faible'
+        else: ftq = '--'
+
+        flex_rows.append({
+            'Hotel'          : hotel_ft,
+            'BCC'            : f"{dea.bcc_scores.get(hotel_ft,0):.1%}",
+            'Classement'     : '★' * stars_ft,
+            'Flow Through %' : f"{ft_val:.1%}" if isinstance(ft_val, float) else '--',
+            'Source'         : src,
+            'Qualite FT'     : ftq,
+            'Expense Flex %' : f"{flex_val:.1%}" if flex_val is not None else '--',
+            'Cible std'      : '50%',
+            'Ecart cible'    : f"{(ft_val - 0.50):+.1%}" if isinstance(ft_val, float) else '--',
+            'Driver revenu'  : driver_ft if src == 'Calcule' else '--',
+        })
+
+    st.dataframe(pd.DataFrame(flex_rows), use_container_width=True, hide_index=True)
+    st.info('FT > 50% = bonne conversion revenus -> profit. FT < 50% = charges variables elevees. Expense Flex calcule quand CA baisse.')
+
 # ══════════════════════════════════════════════
 # TAB 10 — BENCHMARK MARCHÉ
 # ══════════════════════════════════════════════
@@ -968,6 +1065,69 @@ with tab10:
                           xaxis=dict(title="RGI", range=[50, max(str_df['RGI'])*1.15]),
                           height=max(350, dea.n * 30), paper_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig_rgi, use_container_width=True)
+
+    # Barres MPI et ARI si disponibles
+    str_idx_charts = [(col, ttl, clr) for col, ttl, clr in [
+        ('MPI', 'MPI Market Penetration Index (Occupation)', '#3498db'),
+        ('ARI', 'ARI Average Rate Index (Tarif)', '#9b59b6'),
+    ] if col in str_df.columns]
+
+    if str_idx_charts:
+        idx_c = st.columns(len(str_idx_charts))
+        for ci, (icol, ititle, icolor) in enumerate(str_idx_charts):
+            sub_i = str_df.dropna(subset=[icol]).sort_values(icol)
+            if sub_i.empty: continue
+            fig_i = go.Figure(go.Bar(
+                x=sub_i[icol], y=sub_i['Hotel'], orientation='h',
+                marker=dict(color=sub_i[icol], colorscale='RdYlGn', cmin=70, cmax=140,
+                            showscale=True, colorbar=dict(title=icol)),
+                text=[f"{v:.0f}" for v in sub_i[icol]], textposition='outside',
+            ))
+            fig_i.add_vline(x=100, line_dash='dash', line_color='gray')
+            fig_i.update_layout(title=ititle, xaxis=dict(range=[50, max(sub_i[icol])*1.15]),
+                                height=max(280, len(sub_i)*28), paper_bgcolor='rgba(0,0,0,0)')
+            idx_c[ci].plotly_chart(fig_i, use_container_width=True)
+
+        st.info('RGI = RevPAR hôtel / RevPAR marche x100 | MPI = OCC hôtel / OCC marche x100 | ARI = ADR hôtel / ADR marche x100 | >100 = au-dessus fair share | <80 ou >130 = revalider compset (Russo & Legel Exhibit 9)')
+
+    # Profil Compset (Exhibit 8)
+    st.markdown('---')
+    st.markdown('<p class="section-title">Profil Compset - Grille de coherence (Exhibit 8)</p>', unsafe_allow_html=True)
+    st.caption('Valider que les DMUs sont comparables avant interpretation DEA. RGI doit rester entre 80 et 130% pour valider le compset.')
+
+    _compset_init = pd.DataFrame({
+        'Hotel'           : dea.hotels,
+        'Nb chambres'     : [int(dea.df.loc[h, 'nb_lits']) for h in dea.hotels],
+        'Annee ouv.'      : [0]*dea.n,
+        'Dern. renov.'    : [0]*dea.n,
+        'Classement (e)'  : [3]*dea.n,
+        'Affiliation'     : ['Independant']*dea.n,
+        'Meeting (m2)'    : [0]*dea.n,
+        'Localisation'    : ['Centre-ville']*dea.n,
+        'Gestion'         : ['3rd party']*dea.n,
+    }).set_index('Hotel')
+    if 'compset_profile' not in st.session_state or set(st.session_state['compset_profile'].index) != set(dea.hotels):
+        st.session_state['compset_profile'] = _compset_init
+
+    _cs = st.data_editor(
+        st.session_state['compset_profile'], use_container_width=True,
+        column_config={
+            'Nb chambres'   : st.column_config.NumberColumn('Nb ch.', min_value=0, format='%d'),
+            'Annee ouv.'    : st.column_config.NumberColumn('Annee ouv.', min_value=1800, max_value=2030, format='%d'),
+            'Dern. renov.'  : st.column_config.NumberColumn('Dern. renov.', min_value=1800, max_value=2030, format='%d'),
+            'Classement (e)': st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
+            'Affiliation'   : st.column_config.SelectboxColumn('Affiliation', options=['Independant','Franchise','Mgmt contract','Owner-operated']),
+            'Localisation'  : st.column_config.SelectboxColumn('Localisation', options=['Centre-ville','Suburban','Airport','Resort','Route']),
+            'Gestion'       : st.column_config.SelectboxColumn('Gestion', options=['3rd party','Brand-managed','Owner-operated']),
+            'Meeting (m2)'  : st.column_config.NumberColumn('Meeting m2', min_value=0, format='%d'),
+        }, key='compset_editor',
+    )
+    st.session_state['compset_profile'] = _cs
+    _ch_vals = _cs['Nb chambres'].values
+    if _ch_vals.max() > 0 and _ch_vals.min() > 0:
+        _ratio = _ch_vals.max() / _ch_vals.min()
+        if _ratio > 3: st.warning(f'Ratio taille max/min = {_ratio:.1f}x - compset heterogene. Segmenter ou affiner.')
+        else: st.success(f'Homogeneite capacite OK : ratio max/min = {_ratio:.1f}x')
 
     st.markdown("---")
     kpis_def = {
@@ -1114,12 +1274,123 @@ sont automatiquement mappées vers les noms standard des modules.*
     else:
         render_synthesis_tab(_module_results, dmu_col="hotel_name")
 
+
+# ══════════════════════════════════════════════
+# TAB 12 -- VARIANCE BUDGET
+# ══════════════════════════════════════════════
+with tab12:
+    st.markdown('<p class="section-title">Analyse de Variance Budget -- Format USALI</p>', unsafe_allow_html=True)
+    st.caption('Russo & Legel Exhibit 6 : N-1 / Budget / Realise en PAR (Per Available Room), POR (Per Occupied Room), % CA')
+
+    sel_var = st.selectbox('Actif a analyser', options=dea.hotels, key='var_hotel_sel')
+    lits_v  = float(dea.df.loc[sel_var, 'nb_lits'])
+    occ_v   = float(dea.df.loc[sel_var, 'taux_occupation']) / 100
+    revpar_v= float(dea.df.loc[sel_var, 'revpar'])
+    nights_v= lits_v * 365 * occ_v
+    par_v   = lits_v * 365
+    ca_v    = revpar_v * lits_v * 365
+
+    USALI_ITEMS = [
+        ('Rooms Revenue', 'POR'),
+        ('F&B Revenue', 'POR'),
+        ('Other Revenue', 'POR'),
+        ('Rooms Expense', 'POR'),
+        ('F&B Expense', '% Rev'),
+        ('Other Dept Expense', '% Rev'),
+        ('Admin & General', 'PAR'),
+        ('Sales & Marketing', 'PAR'),
+        ('Property Ops & Maintenance', 'PAR'),
+        ('Utilities', 'PAR'),
+        ('GOP', 'PAR'),
+        ('Management Fees', '% CA'),
+        ('Property Taxes', 'PAR'),
+        ('Insurance', 'PAR'),
+        ('EBITDA', 'PAR'),
+    ]
+
+    _vkey = f'var_{sel_var}'
+    if _vkey not in st.session_state:
+        st.session_state[_vkey] = {ln: {'n1':0.0,'bud':0.0,'rea':0.0} for ln,_ in USALI_ITEMS}
+
+    _var_rows_in = [{'Poste': ln, 'Metrique': mt,
+        'N-1 (e)': st.session_state[_vkey].get(ln,{}).get('n1',0.0),
+        'Budget (e)': st.session_state[_vkey].get(ln,{}).get('bud',0.0),
+        'Realise (e)': st.session_state[_vkey].get(ln,{}).get('rea',0.0),
+    } for ln, mt in USALI_ITEMS]
+
+    _edited = st.data_editor(
+        pd.DataFrame(_var_rows_in), use_container_width=True, hide_index=True,
+        column_config={
+            'Poste'      : st.column_config.TextColumn('Poste USALI', disabled=True),
+            'Metrique'   : st.column_config.TextColumn('Metrique', disabled=True),
+            'N-1 (e)'    : st.column_config.NumberColumn('N-1 Realise (e)', format='%.0f', step=1000.0),
+            'Budget (e)' : st.column_config.NumberColumn('Budget N (e)', format='%.0f', step=1000.0),
+            'Realise (e)': st.column_config.NumberColumn('N Realise (e)', format='%.0f', step=1000.0),
+        }, key=f'veditor_{sel_var}',
+    )
+
+    # Variances
+    st.markdown('---')
+    st.markdown('<p class="section-title">Tableau de Variance PAR / POR / % CA</p>', unsafe_allow_html=True)
+    st.caption(f'PAR base = {par_v:,.0f} room-nights | POR base = {nights_v:,.0f} nuitees | CA ref = {ca_v:,.0f} euros')
+
+    _vres = []
+    for _, row_v in _edited.iterrows():
+        ln_v = row_v['Poste']; mt_v = row_v['Metrique']
+        n1_v  = float(row_v['N-1 (e)'])    if row_v['N-1 (e)']    else 0.0
+        bud_v = float(row_v['Budget (e)'])  if row_v['Budget (e)'] else 0.0
+        rea_v = float(row_v['Realise (e)']) if row_v['Realise (e)'] else 0.0
+
+        var_b = rea_v - bud_v; var_n1 = rea_v - n1_v
+        pct_b = var_b / abs(bud_v) * 100 if bud_v != 0 else 0
+        pct_n1= var_n1/ abs(n1_v)  * 100 if n1_v  != 0 else 0
+
+        base_v = par_v if mt_v=='PAR' else nights_v if mt_v=='POR' else ca_v
+        def _fmt(v): return f'{v/base_v*100:.1f}%' if mt_v=='% CA' and base_v>0 else (f'{v/base_v:.2f}' if base_v>0 else '--')
+
+        _vres.append({
+            'Poste'          : ln_v,
+            'N-1'            : f"{n1_v:,.0f}" if n1_v else '--',
+            'Budget'         : f"{bud_v:,.0f}" if bud_v else '--',
+            'Realise'        : f"{rea_v:,.0f}" if rea_v else '--',
+            'Ecart/Budget'   : f"{var_b:+,.0f} ({pct_b:+.1f}%)" if bud_v else '--',
+            'Ecart/N-1'      : f"{var_n1:+,.0f} ({pct_n1:+.1f}%)" if n1_v else '--',
+            f'N {mt_v}'      : _fmt(rea_v),
+            f'Bud {mt_v}'    : _fmt(bud_v),
+            f'N-1 {mt_v}'    : _fmt(n1_v),
+        })
+
+    if _vres:
+        st.dataframe(pd.DataFrame(_vres), use_container_width=True, hide_index=True)
+        _csv_v = pd.DataFrame(_vres).to_csv(index=False, sep=';', decimal=',')
+        st.download_button('Exporter Variance (CSV)', data=_csv_v.encode('utf-8-sig'),
+                           file_name=f'variance_{sel_var}.csv', mime='text/csv')
+
+        # Bar chart realise vs budget vs N-1
+        def _peur(s): return float(s.replace(',','').replace(' ','')) if s != '--' else 0
+        _chart_r = [r for r in _vres if any(v != '--' for v in [r['Realise'],r['Budget'],r['N-1']])]
+        if _chart_r:
+            _postes_v = [r['Poste'] for r in _chart_r]
+            fig_var = go.Figure()
+            for _s, _col in [('N-1','#95a5a6'),('Budget','#f39c12'),('Realise','#2ecc71')]:
+                _vals_v = [_peur(r[_s]) for r in _chart_r]
+                fig_var.add_trace(go.Bar(name=_s, x=_postes_v, y=_vals_v, marker_color=_col, opacity=0.85))
+            fig_var.update_layout(barmode='group', title='N-1 vs Budget vs Realise',
+                                  xaxis_tickangle=-30, height=400, paper_bgcolor='rgba(0,0,0,0)',
+                                  yaxis=dict(title='Montant (e)', tickformat=',.0f'),
+                                  legend=dict(orientation='h', yanchor='bottom', y=1.02))
+            st.plotly_chart(fig_var, use_container_width=True)
+
+    c_ft1, c_ft2 = st.columns(2)
+    c_ft1.info('**Flow Through** (CA augmente)\nFT = delta GOP / delta CA\nCible : 50% | Rate-driven : FT eleve | Volume-driven : FT faible')
+    c_ft2.info('**Expense Flex** (CA baisse)\nFlex = 1 - FT\nMesure la capacite a reduire les couts quand le CA recule.')
+
 # ─────────────────────────────────────────────
 #  Footer
 # ─────────────────────────────────────────────
 st.markdown("---")
 st.caption(
-    f"DEA-H v3.2 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
+    f"DEA-H v3.3 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
     "Modèles : BCC/CCR · TOPSIS · K-means · Metafrontière · Multi-Module DEA (7 dimensions) · "
     "Méthodologie : Charnes et al. (1978), Banker et al. (1984), Min et al. (2009), Assaf (2010)"
 )
