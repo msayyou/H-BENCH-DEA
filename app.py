@@ -187,13 +187,44 @@ for old, new in _COL_ALIAS.items():
     if old in _df_mm.columns and new not in _df_mm.columns:
         _df_mm[new] = _df_mm[old]
 
-# Calcul revenue_per_fte si possible
+# ── Colonnes calculées automatiquement ──────────────────────────────────────
+# ADR = RevPAR / (TO/100)  — toujours calculable depuis le dataset DEA-H base
+if "revpar" in _df_mm.columns and "occupancy_rate" in _df_mm.columns:
+    if "adr" not in _df_mm.columns:
+        _df_mm["adr"] = (
+            _df_mm["revpar"] / (_df_mm["occupancy_rate"] / 100).replace(0, np.nan)
+        ).round(2)
+
+# TRevPAR = CA total / nb_rooms (si total_revenue disponible)
+if "total_revenue" in _df_mm.columns and "nb_rooms" in _df_mm.columns:
+    if "trevpar" not in _df_mm.columns:
+        _df_mm["trevpar"] = (
+            _df_mm["total_revenue"] / (_df_mm["nb_rooms"] * 365)
+        ).round(2)
+
+# revenue_per_fte = CA / ETP
 if "total_revenue" in _df_mm.columns and "fte_total" in _df_mm.columns:
-    _df_mm["revenue_per_fte"] = (_df_mm["total_revenue"] / _df_mm["fte_total"].replace(0, np.nan))
+    if "revenue_per_fte" not in _df_mm.columns:
+        _df_mm["revenue_per_fte"] = (
+            _df_mm["total_revenue"] / _df_mm["fte_total"].replace(0, np.nan)
+        ).round(0)
 elif "revpar" in _df_mm.columns and "nb_rooms" in _df_mm.columns and "fte_total" in _df_mm.columns:
-    _df_mm["revenue_per_fte"] = (
-        _df_mm["revpar"] * 365 * _df_mm["nb_rooms"] / _df_mm["fte_total"].replace(0, np.nan)
-    )
+    if "revenue_per_fte" not in _df_mm.columns:
+        _df_mm["revenue_per_fte"] = (
+            _df_mm["revpar"] * 365 * _df_mm["nb_rooms"] / _df_mm["fte_total"].replace(0, np.nan)
+        ).round(0)
+
+# rooms_revenue estimé = revpar × nb_rooms × 365 (proxy si absent)
+if "revpar" in _df_mm.columns and "nb_rooms" in _df_mm.columns:
+    if "rooms_revenue" not in _df_mm.columns:
+        _df_mm["rooms_revenue"] = (
+            _df_mm["revpar"] * (_df_mm["occupancy_rate"] / 100 if "occupancy_rate" in _df_mm.columns else 1)
+            * _df_mm["nb_rooms"] * 365
+        ).round(0)
+
+# total_revenue estimé = rooms_revenue (proxy minimal si absent)
+if "total_revenue" not in _df_mm.columns and "rooms_revenue" in _df_mm.columns:
+    _df_mm["total_revenue"] = _df_mm["rooms_revenue"]
 
 _available_mm = [c for c in _df_mm.columns if c != "hotel_name"]
 
