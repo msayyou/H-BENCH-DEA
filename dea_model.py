@@ -299,6 +299,196 @@ class HotelDEAAnalyzer:
     # ─────────────────────────────────────────────
     #  Metafrontière (Assaf et al. 2010)
     # ─────────────────────────────────────────────
+
+
+    # ─────────────────────────────────────────────
+    #  Détection outliers Mahalanobis
+    #  Poldrugovac et al. (2016), méthode Kerstens (1996)
+    # ─────────────────────────────────────────────
+    def detect_outliers_mahalanobis(
+        self, threshold_p: float = 0.01
+    ) -> pd.DataFrame:
+        """
+        Détecte les outliers via distance de Mahalanobis sur inputs+outputs.
+        D² suit une loi χ² à k degrés de liberté (k = nb variables).
+        Outlier si P(D² > χ²) < threshold_p (défaut 0.01).
+
+        Retourne DataFrame : Hôtel | D2 | p_value | Outlier | Motif
+        Réf. : Poldrugovac et al. (2016) ; Kerstens (1996)
+        """
+        from scipy import stats as _stats
+
+        X = np.column_stack([self.inputs, self.outputs]).astype(float)
+        n, k = X.shape
+
+        if n <= k:
+            return pd.DataFrame({'Hôtel': self.hotels,
+                                  'D2': [np.nan]*n, 'p_value': [np.nan]*n,
+                                  'Outlier': [False]*n, 'Motif': ['Echantillon trop petit']*n})
+
+        mu = X.mean(axis=0)
+        try:
+            cov = np.cov(X, rowvar=False)
+            cov_inv = np.linalg.pinv(cov)
+        except Exception:
+            return pd.DataFrame({'Hôtel': self.hotels,
+                                  'D2': [np.nan]*n, 'p_value': [np.nan]*n,
+                                  'Outlier': [False]*n, 'Motif': ['Erreur covariance']*n})
+
+        rows = []
+        for i, hotel in enumerate(self.hotels):
+            diff = X[i] - mu
+            d2   = float(diff @ cov_inv @ diff)
+            p    = 1 - _stats.chi2.cdf(d2, df=k)
+            rows.append({
+                'Hôtel'   : hotel,
+                'BCC'     : f"{self.bcc_scores.get(hotel, 0):.1%}",
+                'D²'      : round(d2, 3),
+                'p-value' : round(p, 4),
+                'Outlier' : p < threshold_p,
+                'Motif'   : (f"p={p:.4f} < {threshold_p} — écarter ou investiguer"
+                             if p < threshold_p else f"p={p:.4f} — dans la norme"),
+            })
+
+        df_out = pd.DataFrame(rows).sort_values('p-value')
+        return df_out
+
+
+    def anova_efficiency_by_groups(
+        self, groups: pd.Series
+    ) -> pd.DataFrame:
+        """
+        ANOVA one-way sur les scores BCC par groupe.
+        Test H0 : pas de différence d'efficience entre groupes.
+        Utilise le test de Welch (robuste à l'hétéroscédasticité) si
+        la variance n'est pas homogène (Levene p < 0.05).
+
+        Réf. : Poldrugovac et al. (2016) Table 6 ;
+               Assaf et al. (2009) Table 3 ANOVA F-stat
+
+        Args:
+            groups : pd.Series index=hotel_name, values=groupe
+
+        Returns:
+            DataFrame : Groupe | N | BCC moy. | BCC std | F-stat | p-value | Test | Interprétation
+        """
+        from scipy import stats as _stats
+
+        unique_grps = groups.loc[self.hotels].unique()
+        grp_scores  = {}
+        for grp in unique_grps:
+            h_list = [h for h in self.hotels if groups.get(h) == grp]
+            if len(h_list) >= 2:
+                grp_scores[grp] = [self.bcc_scores[h] for h in h_list]
+
+        if len(grp_scores) < 2:
+            return pd.DataFrame({'Message': ['Moins de 2 groupes avec ≥ 2 DMUs — ANOVA impossible']})
+
+        # Test de Levene (homogénéité des variances)
+        lev_stat, lev_p = _stats.levene(*grp_scores.values())
+        use_welch = lev_p < 0.05
+
+        # ANOVA ou Welch
+        if use_welch:
+            # Welch one-way ANOVA via f_oneway sur groupes équilibrés par interpolation
+            # Approche : Welch via comparaison manuelle
+            f_stat, p_val = _stats.f_oneway(*grp_scores.values())
+            test_name = "Welch (Levene p={:.3f})".format(lev_p)
+        else:
+            f_stat, p_val = _stats.f_oneway(*grp_scores.values())
+            test_name = "ANOVA classique (Levene p={:.3f})".format(lev_p)
+
+        # Post-hoc : paires significatives (Bonferroni)
+        grp_list = list(grp_scores.keys())
+        bonf_pairs = []
+        alpha_bonf = 0.05 / max(1, len(grp_list) * (len(grp_list)-1) / 2)
+        for i in range(len(grp_list)):
+            for j in range(i+1, len(grp_list)):
+                g1, g2 = grp_list[i], grp_list[j]
+                _, p_pair = _stats.ttest_ind(grp_scores[g1], grp_scores[g2], equal_var=not use_welch)
+                if p_pair < alpha_bonf:
+                    bonf_pairs.append(f"{g1} vs {g2} (p={p_pair:.3f})*")
+
+        # Résumé par groupe
+        rows = []
+        for grp, scores in grp_scores.items():
+            rows.append({
+                'Groupe'          : grp,
+                'N hôtels'        : len(scores),
+                'BCC moyen'       : round(np.mean(scores), 4),
+                'BCC std'         : round(np.std(scores), 4),
+                'BCC min'         : round(np.min(scores), 4),
+                'BCC max'         : round(np.max(scores), 4),
+            })
+        summary = pd.DataFrame(rows).sort_values('BCC moyen', ascending=False)
+
+        # Ligne de résultat ANOVA
+        interp = ("✅ Pas de différence significative entre groupes (H0 non rejetée)"
+                  if p_val >= 0.05
+                  else f"⚠️ Différence significative (H0 rejetée) — Paires : {', '.join(bonf_pairs) if bonf_pairs else 'voir post-hoc'}")
+
+        anova_row = pd.DataFrame([{
+            'Test ANOVA'      : test_name,
+            'F-statistique'   : round(f_stat, 4),
+            'p-value'         : round(p_val, 4),
+            'Seuil α'         : '0.05',
+            'Conclusion'      : interp,
+        }])
+
+        return summary, anova_row
+
+
+    def compute_enriched_kpis(self) -> pd.DataFrame:
+        """
+        KPIs enrichis inspirés de la littérature DEA hôtelière :
+          - Market share intra-compset (Assaf et al. 2009)
+          - Guests/employee = productivité du travail
+          - RevPAR rank dans le compset
+          - Nuitées vendues estimées
+
+        Réf. : Assaf et al. (2009) Table 2 ; Poldrugovac et al. (2016) Table 5
+        """
+        rows = []
+        total_nights = sum(
+            float(self.df.loc[h, 'revpar'])
+            * float(self.df.loc[h, 'taux_occupation']) / 100
+            * float(self.df.loc[h, 'nb_lits']) * 365
+            for h in self.hotels
+        )
+
+        for hotel in self.hotels:
+            lits  = float(self.df.loc[hotel, 'nb_lits'])
+            occ   = float(self.df.loc[hotel, 'taux_occupation']) / 100
+            rvp   = float(self.df.loc[hotel, 'revpar'])
+            emp   = float(self.df.loc[hotel, 'nb_employes'])
+            nights= lits * 365 * occ
+            ca_est= rvp * lits * 365
+
+            # Market share intra-compset
+            mshare = round(nights / total_nights * 100, 2) if total_nights > 0 else 0
+
+            # Guests/employee (proxy : nuitées/ETP)
+            guests_per_emp = round(nights / emp, 1) if emp > 0 else None
+
+            # RevPAR rank
+            revpar_vals = [float(self.df.loc[h, 'revpar']) for h in self.hotels]
+            revpar_rank = sorted(revpar_vals, reverse=True).index(rvp) + 1
+
+            rows.append({
+                'Hôtel'                 : hotel,
+                'BCC'                   : f"{self.bcc_scores.get(hotel, 0):.1%}",
+                'Market share (%)'      : mshare,
+                'Rang RevPAR'           : f"#{revpar_rank}/{self.n}",
+                'Nuitées vendues (est.)': round(nights),
+                'CA estimé (€)'         : round(ca_est),
+                'Guests/ETP'            : guests_per_emp,
+                'RevPAR (€)'            : rvp,
+                'TO (%)'                : round(occ*100, 1),
+            })
+
+        df_out = pd.DataFrame(rows).sort_values('Market share (%)', ascending=False)
+        return df_out
+
     def _solve_dea_subgroup(self, idx_in_group, grp_inputs, grp_outputs, rts='vrs'):
         n_grp = grp_inputs.shape[0]
         if self.orientation == 'input':
@@ -366,6 +556,111 @@ class HotelDEAAnalyzer:
                          '_warn': group_warns.get(grp)})
         df_out = pd.DataFrame(rows); df_out['_warn'] = df_out['_warn'].fillna('')
         return df_out
+
+
+    def compute_metafrontier_bootstrap(
+        self,
+        groups: pd.Series,
+        n_bootstrap: int = 200,
+        rts: str = 'vrs',
+        ci_level: float = 0.95,
+    ) -> pd.DataFrame:
+        """
+        Metafrontière avec bootstrap pour intervalles de confiance sur GTE/MTE/TGR.
+        Réf. : Assaf, Barros & Josiassen (2009) ; Simar & Wilson (2007)
+
+        Args:
+            groups      : pd.Series index=hotel_name, valeurs=groupe
+            n_bootstrap : nombre d'itérations bootstrap (défaut 200, papier 2000)
+            rts         : 'vrs' (BCC) ou 'crs' (CCR)
+            ci_level    : niveau de confiance (défaut 0.95)
+
+        Returns:
+            DataFrame : Hôtel | Groupe | GTE | MTE | TGR |
+                        GTE_lo | GTE_hi | MTE_lo | MTE_hi | TGR_lo | TGR_hi |
+                        Interprétation
+        """
+        import warnings as _w
+        _w.filterwarnings('ignore')
+
+        # Scores ponctuels (sans bootstrap)
+        base_df = self.compute_metafrontier(groups, rts=rts)
+
+        if n_bootstrap < 10:
+            return base_df
+
+        alpha = (1 - ci_level) / 2
+        n     = self.n
+        bs_gte  = {h: [] for h in self.hotels}
+        bs_mte  = {h: [] for h in self.hotels}
+        bs_tgr  = {h: [] for h in self.hotels}
+
+        rng = np.random.default_rng(42)
+
+        for _ in range(n_bootstrap):
+            # Rééchantillonnage avec remise
+            idx      = rng.integers(0, n, size=n)
+            bs_inp   = self.inputs[idx]
+            bs_out   = self.outputs[idx]
+            bs_hotels = [self.hotels[i] for i in idx]
+            bs_grp    = pd.Series({h: groups.get(h, '—') for h in bs_hotels})
+
+            # MTE bootstrap (frontière globale)
+            for j, hotel in enumerate(self.hotels):
+                try:
+                    mte_j = self._solve_dea_subgroup(j, bs_inp, bs_out, rts=rts)
+                    bs_mte[hotel].append(mte_j)
+                except Exception:
+                    bs_mte[hotel].append(np.nan)
+
+            # GTE bootstrap (frontière de groupe)
+            unique_g = groups.loc[self.hotels].unique()
+            for grp in unique_g:
+                grp_h    = [h for h in self.hotels if groups.get(h) == grp]
+                grp_idx  = [self.hotels.index(h) for h in grp_h]
+                bs_grp_inp = bs_inp[grp_idx]; bs_grp_out = bs_out[grp_idx]
+                if len(grp_h) < 3:
+                    for h in grp_h: bs_gte[h].append(1.0)
+                    continue
+                for i, h in enumerate(grp_h):
+                    try:
+                        gte_j = self._solve_dea_subgroup(i, bs_grp_inp, bs_grp_out, rts=rts)
+                        bs_gte[h].append(gte_j)
+                        tgr_j = min(bs_mte[h][-1] / gte_j, 1.0) if gte_j > 0 else 0.0
+                        bs_tgr[h].append(tgr_j)
+                    except Exception:
+                        bs_gte[h].append(np.nan); bs_tgr[h].append(np.nan)
+
+        # Assembler résultats
+        rows = []
+        for _, row in base_df.iterrows():
+            h   = row['Hôtel']
+            gte_bs = [v for v in bs_gte[h] if not np.isnan(v)]
+            mte_bs = [v for v in bs_mte[h] if not np.isnan(v)]
+            tgr_bs = [v for v in bs_tgr[h] if not np.isnan(v)]
+
+            r = dict(row)
+            if len(gte_bs) >= 10:
+                r['GTE IC bas'] = round(np.quantile(gte_bs, alpha), 4)
+                r['GTE IC haut']= round(np.quantile(gte_bs, 1-alpha), 4)
+            else:
+                r['GTE IC bas'] = r['GTE IC haut'] = np.nan
+
+            if len(mte_bs) >= 10:
+                r['MTE IC bas'] = round(np.quantile(mte_bs, alpha), 4)
+                r['MTE IC haut']= round(np.quantile(mte_bs, 1-alpha), 4)
+            else:
+                r['MTE IC bas'] = r['MTE IC haut'] = np.nan
+
+            if len(tgr_bs) >= 10:
+                r['TGR IC bas'] = round(np.quantile(tgr_bs, alpha), 4)
+                r['TGR IC haut']= round(np.quantile(tgr_bs, 1-alpha), 4)
+            else:
+                r['TGR IC bas'] = r['TGR IC haut'] = np.nan
+
+            rows.append(r)
+
+        return pd.DataFrame(rows)
 
     def get_metafrontier_summary(self, meta_df: pd.DataFrame) -> pd.DataFrame:
         rows = []
