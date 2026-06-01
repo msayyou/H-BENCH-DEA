@@ -1,5 +1,5 @@
 """
-app.py — DEA-H v3.3
+app.py — DEA-H v3.4
 Application Streamlit : Analyse DEA BCC/CCR pour Asset Management Hôtelier
 11 onglets : Board | KPIs | TOPSIS | K-means | Quadrants | Slacks | Fiche Actif
            | Metafrontière | Capital & Flow Through | Benchmark Marché
@@ -358,6 +358,23 @@ with tab1:
     st.markdown('<p class="section-title">Répartition par Quadrant</p>', unsafe_allow_html=True)
     q_summary = dea.get_quadrant_summary()
     st.dataframe(q_summary.drop(columns=['Hôtels'], errors='ignore'), use_container_width=True, hide_index=True)
+
+    # ── Détection outliers Mahalanobis (Poldrugovac et al. 2016) ─────────────────────
+    st.markdown('<p class="section-title">Détection Outliers — Distance de Mahalanobis</p>', unsafe_allow_html=True)
+    st.caption("Poldrugovac et al. (2016) ; Kerstens (1996) — D² suit une loi χ² à k degrés de liberté. Outlier si p < 0.01. Exclure les outliers avant interprétation des scores DEA.")
+
+    _mah_df = dea.detect_outliers_mahalanobis(threshold_p=0.01)
+    _n_outliers = _mah_df['Outlier'].sum()
+
+    if _n_outliers > 0:
+        _outlier_names = _mah_df[_mah_df['Outlier']]['Hôtel'].tolist()
+        st.error(f"**{_n_outliers} outlier(s) détecté(s) :** {', '.join(_outlier_names)} — vérifier la cohérence du compset avant interprétation.")
+    else:
+        st.success("✅ Aucun outlier détecté (p > 0.01 pour tous les DMUs) — compset homogène.")
+
+    st.dataframe(_mah_df, use_container_width=True, hide_index=True)
+    st.caption("D² = distance de Mahalanobis au centre du nuage de points | p-value = probabilité sous H0 : 'ce DMU appartient à la distribution' | Seuil : p < 0.01")
+
 
 # ══════════════════════════════════════════════
 # TAB 2 — DASHBOARD KPIs
@@ -813,6 +830,7 @@ with tab8:
     )
     st.plotly_chart(fig_tgr, use_container_width=True)
 
+
     col1, col2 = st.columns(2)
     with col1:
         st.success("**✅ GTE élevé + TGR élevé** — Leader absolu. Conserver, benchmark.")
@@ -820,6 +838,75 @@ with tab8:
     with col2:
         st.info("**🧠 GTE faible + TGR élevé** — Potentiel là, gestion insuffisante → plan opérationnel.")
         st.error("**🔴 GTE faible + TGR faible** — Double gap. Cession ou restructuration.")
+
+    # ── ANOVA second stage (Poldrugovac 2016 ; Assaf 2009) ────────────────────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">ANOVA Second Stage -- Differences efficience entre groupes</p>', unsafe_allow_html=True)
+    st.caption('Poldrugovac et al. (2016) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
+
+    try:
+        _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
+        col_a1, col_a2 = st.columns([2, 1])
+        with col_a1:
+            st.markdown("**Efficience BCC par groupe**")
+            st.dataframe(_anova_summ, use_container_width=True, hide_index=True)
+        with col_a2:
+            st.markdown("**Résultat ANOVA**")
+            st.dataframe(_anova_res, use_container_width=True, hide_index=True)
+    except Exception as _e:
+        st.info(f"ANOVA non disponible : {_e}")
+
+    # ── Bootstrap Metafrontière (Assaf 2009 ; Simar & Wilson 2007) ─────────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">Bootstrap Metafrontière — Intervalles de confiance IC 95%</p>', unsafe_allow_html=True)
+    st.caption("Assaf, Barros & Josiassen (2009) ; Simar & Wilson (2007) — 2000 itérations dans le papier original. Ici 200 itérations pour performance. IC 95% sur GTE, MTE, TGR.")
+
+    _n_boot = st.slider("Nombre d'itérations bootstrap", min_value=50, max_value=500, value=100, step=50, key="meta_bootstrap_n")
+    if st.button("🔄 Lancer Bootstrap Metafrontière", key="meta_boot_btn"):
+        with st.spinner(f"Bootstrap {_n_boot} itérations en cours…"):
+            try:
+                _boot_df = dea.compute_metafrontier_bootstrap(groups, n_bootstrap=_n_boot)
+                st.session_state['meta_bootstrap'] = _boot_df
+                st.success(f"✅ Bootstrap terminé — {_n_boot} itérations")
+            except Exception as _e:
+                st.error(f"Erreur bootstrap : {_e}")
+
+    if 'meta_bootstrap' in st.session_state and st.session_state['meta_bootstrap'] is not None:
+        _bdf = st.session_state['meta_bootstrap']
+        _boot_cols = ['Hôtel', 'Groupe', 'GTE', 'GTE IC bas', 'GTE IC haut',
+                      'MTE', 'MTE IC bas', 'MTE IC haut',
+                      'TGR', 'TGR IC bas', 'TGR IC haut', 'Interprétation']
+        _boot_cols_avail = [c for c in _boot_cols if c in _bdf.columns]
+        st.dataframe(_bdf[_boot_cols_avail].sort_values('TGR'), use_container_width=True, hide_index=True)
+        st.caption("IC bas / IC haut = quantiles 2.5% et 97.5% des scores bootstrap. Un IC large indique une incertitude statistique élevée sur le score.")
+
+    # ── KPIs enrichis — Market share + Guests/ETP (Assaf 2009) ───────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">KPIs Enrichis — Market Share & Productivité du Travail</p>', unsafe_allow_html=True)
+    st.caption("Assaf et al. (2009) Table 2 — Market share intra-compset | Guests/ETP = nb nuitées / ETP (productivité travail).")
+
+    _enr_df = dea.compute_enriched_kpis()
+    st.dataframe(_enr_df, use_container_width=True, hide_index=True)
+
+    # Scatter market share vs BCC
+    _enr_bcc = [dea.bcc_scores.get(h, 0) for h in _enr_df['Hôtel']]
+    fig_ms = go.Figure()
+    for i, h in enumerate(_enr_df['Hôtel']):
+        _ms = _enr_df.iloc[i]['Market share (%)']
+        _bcc = _enr_bcc[i]
+        _color = '#27ae60' if _bcc >= 0.90 else '#f39c12' if _bcc >= 0.80 else '#e74c3c'
+        fig_ms.add_trace(go.Scatter(
+            x=[_ms], y=[_bcc], mode='markers+text', text=[h],
+            textposition='top center', textfont=dict(size=8),
+            marker=dict(size=10, color=_color), showlegend=False,
+        ))
+    fig_ms.update_layout(
+        title="Market Share intra-compset vs Efficience BCC (Assaf et al. 2009)",
+        xaxis=dict(title="Market Share (%)"),
+        yaxis=dict(title="Score BCC", tickformat='.0%', range=[0.3, 1.08]),
+        height=400, paper_bgcolor='rgba(0,0,0,0)',
+    )
+    st.plotly_chart(fig_ms, use_container_width=True)
 
 # ══════════════════════════════════════════════
 # TAB 9 — CAPITAL & FLOW THROUGH
@@ -1498,7 +1585,7 @@ with tab12:
 # ─────────────────────────────────────────────
 st.markdown("---")
 st.caption(
-    f"DEA-H v3.3 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
+    f"DEA-H v3.4 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
     "Modèles : BCC/CCR · TOPSIS · K-means · Metafrontière · Multi-Module DEA (7 dimensions) · "
-    "Méthodologie : Charnes et al. (1978), Banker et al. (1984), Min et al. (2009), Assaf (2010)"
+    "Méthodologie : Charnes et al. (1978), Banker et al. (1984), Min et al. (2009), Assaf et al. (2009), Poldrugovac et al. (2016)"
 )
