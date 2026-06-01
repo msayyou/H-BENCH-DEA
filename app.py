@@ -959,257 +959,258 @@ with tab9:
 
     has_any = (cap_input[['surface_m2','capex_annuel (k€)','gop (k€)']].sum().sum() > 0)
     if not has_any:
-        st.caption("👆 Aucune donnée capital disponible.")
-        st.stop()
+        st.info("👆 Renseignez surface_m2, CAPEX et GOP dans le tableau ci-dessus pour les analyses capital.")
 
-    st.markdown("---")
-    cap_rows = []
-    for hotel in dea.hotels:
-        row      = cap_input.loc[hotel]
-        surf     = float(row['surface_m2']); capex_ke = float(row['capex_annuel (k€)'])
-        gop_ke   = float(row['gop (k€)']);   stars    = int(row['classement (★)'])
-        lits     = float(dea.df.loc[hotel, 'nb_lits']); revpar = float(dea.df.loc[hotel, 'revpar'])
-        to       = float(dea.df.loc[hotel, 'taux_occupation']) / 100
-        goppam   = round(gop_ke * 1000 / surf, 2)    if surf > 0    else None
-        capex_ch = round(capex_ke * 1000 / lits, 0)  if lits > 0    else None
-        rev_est  = revpar * to * 365 * lits
-        rendement= round(rev_est / (capex_ke * 1000), 2) if capex_ke > 0 else None
-        ft       = FT_BENCH.get(stars, FT_DEFAULT)
-        slack_r  = dea.slacks.get(hotel, {}).get('outputs', {}).get('revpar', 0)
-        up_gop   = round(slack_r * lits * 365 * ft / 1_000_000, 3) if slack_r > 0 else 0
-        gop_margin = round(gop_ke * 1000 / rev_est * 100, 1) if gop_ke > 0 and rev_est > 0 else None
-        cap_rows.append({
-            'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel, 0):.1%}", 'Classement': '★' * stars,
-            'Surface (m²)': int(surf) if surf > 0 else '—',
-            'm²/chambre': round(surf/lits,1) if surf>0 and lits>0 else '—',
-            'CAPEX/chambre (k€)': round(capex_ch/1000,1) if capex_ch else '—',
-            'Rendement CAPEX (x)': rendement if rendement else '—',
-            'GOP (k€)': gop_ke if gop_ke > 0 else '—',
-            'Marge GOP %': f"{gop_margin:.1f}%" if gop_margin else '—',
-            'GOPPAM (€/m²)': goppam if goppam else '—',
-            'FT% benchmark': f"{ft:.0%}",
-            'Upside GOP /FT (M€/an)': up_gop if up_gop > 0 else '—',
-        })
-    cap_df = pd.DataFrame(cap_rows)
-
-    c1, c2, c3, c4 = st.columns(4)
-    goppam_vals = [r['GOPPAM (€/m²)'] for r in cap_rows if r['GOPPAM (€/m²)'] != '—']
-    capex_vals  = [r['CAPEX/chambre (k€)'] for r in cap_rows if r['CAPEX/chambre (k€)'] != '—']
-    margin_vals = [float(r['Marge GOP %'].replace('%','')) for r in cap_rows if r['Marge GOP %'] != '—']
-    upside_vals = [r['Upside GOP /FT (M€/an)'] for r in cap_rows if r['Upside GOP /FT (M€/an)'] != '—']
-    with c1:
-        if goppam_vals: st.metric("GOPPAM moyen", f"{sum(goppam_vals)/len(goppam_vals):.2f} €/m²")
-    with c2:
-        if capex_vals:  st.metric("CAPEX/ch moyen", f"{sum(capex_vals)/len(capex_vals):.1f} k€")
-    with c3:
-        if margin_vals: st.metric("Marge GOP moyenne", f"{sum(margin_vals)/len(margin_vals):.1f}%")
-    with c4:
-        if upside_vals: st.metric("Upside GOP total /FT", f"{sum(upside_vals):.2f} M€/an")
-
-    st.dataframe(cap_df, use_container_width=True, hide_index=True)
-
-    col_l, col_r = st.columns(2)
-    with col_l:
-        plot_data = [(r['Hôtel'], r['GOPPAM (€/m²)'], r['CAPEX/chambre (k€)'], dea.bcc_scores.get(r['Hôtel'],0))
-                     for r in cap_rows if r['GOPPAM (€/m²)'] != '—' and r['CAPEX/chambre (k€)'] != '—']
-        if plot_data:
-            fig_cap = go.Figure()
-            for h, gop_, capx, bcc in plot_data:
-                color = '#27ae60' if bcc>=0.90 else '#f39c12' if bcc>=0.80 else '#e74c3c'
-                fig_cap.add_trace(go.Scatter(
-                    x=[capx], y=[gop_], mode='markers+text', text=[h], textposition='top center',
-                    textfont=dict(size=8), marker=dict(size=10+bcc*8, color=color, opacity=0.8),
-                    showlegend=False,
-                ))
-            fig_cap.update_layout(xaxis=dict(title="CAPEX annuel / chambre (k€)"),
-                                  yaxis=dict(title="GOPPAM (€/m²)"),
-                                  height=400, paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_cap, use_container_width=True)
-    with col_r:
-        margin_data = [(r['Hôtel'], float(r['Marge GOP %'].replace('%','')), dea.bcc_scores.get(r['Hôtel'],0))
-                       for r in cap_rows if r['Marge GOP %'] != '—']
-        if margin_data:
-            fig_gop = go.Figure()
-            for h, margin, bcc in margin_data:
-                color = '#27ae60' if bcc>=0.90 else '#f39c12' if bcc>=0.80 else '#e74c3c'
-                fig_gop.add_trace(go.Scatter(
-                    x=[bcc], y=[margin], mode='markers+text', text=[h], textposition='top center',
-                    textfont=dict(size=8), marker=dict(size=11, color=color, opacity=0.8), showlegend=False,
-                ))
-            fig_gop.update_layout(xaxis=dict(title="Score BCC", tickformat='.0%', range=[0.3,1.05]),
-                                  yaxis=dict(title="Marge GOP %"),
-                                  height=400, paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_gop, use_container_width=True)
-
-    st.markdown("---")
-    upside_rows = []
-    for r in cap_rows:
-        hotel  = r['Hôtel']; stars  = int(cap_input.loc[hotel,'classement (★)'])
-        ft     = FT_BENCH.get(stars, FT_DEFAULT)
-        slk_r  = dea.slacks.get(hotel,{}).get('outputs',{}).get('revpar', 0)
-        lits   = float(dea.df.loc[hotel, 'nb_lits'])
-        up_rev = round(slk_r * lits * 365 / 1_000_000, 3)
-        up_gop = round(up_rev * ft, 3)
-        upside_rows.append({
-            'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel,0):.1%}",
-            'Classement': '★' * stars, 'FT% benchmark': f"{ft:.0%}",
-            'Slack RevPAR (€)': round(slk_r,1) if slk_r > 0 else '—',
-            'Upside Revenu brut (M€)': up_rev if up_rev > 0 else '—',
-            'Upside GOP /FT (M€)': up_gop if up_gop > 0 else '—',
-            'Priorité': ('🔴 Urgent' if up_gop>1.5 else '🟡 Moyen' if up_gop>0.5
-                         else '✅ RAS' if up_gop==0 else '🟢 Faible'),
-        })
-    upside_df = pd.DataFrame(upside_rows)
-    upside_df['_sort'] = pd.to_numeric(upside_df['Upside GOP /FT (M€)'], errors='coerce')
-    upside_df = upside_df.sort_values('_sort', ascending=False, na_position='last').drop(columns=['_sort'])
-    st.dataframe(upside_df, use_container_width=True, hide_index=True)
-
-
-    # ── DEA Capital vs DEA Opérationnel ─────────────────────────────────
-    st.markdown('<p class="section-title">DEA Capital vs DEA Opérationnel</p>', unsafe_allow_html=True)
-    st.caption(
-        "Score opérationnel (BCC) = efficience de gestion. "
-        "Score capital (DEA sur surface + CAPEX → GOP + CA) = efficience du capital immobilisé. "
-        "Au-dessus de la diagonale : capital bien employé. "
-        "En dessous : surcoût immobilier ou CAPEX mal alloué — signal de renégociation de bail ou révision plan CAPEX."
-    )
-
-    # Préparer les données capital depuis cap_input
-    _has_cap_data = (cap_input[['surface_m2','capex_annuel (k€)']].sum().sum() > 0)
-
-    if not _has_cap_data:
-        st.info("Renseigner **surface_m2** et **capex_annuel** dans le tableau ci-dessus pour activer le DEA Capital.")
-    else:
-        # Construire un df temporaire pour compute_capital_dea
-        _cap_df = dea.df.copy()
-        for _hotel in dea.hotels:
-            _row_cap = cap_input.loc[_hotel]
-            if _row_cap['surface_m2'] > 0:
-                _cap_df.loc[_hotel, 'surface_m2'] = _row_cap['surface_m2']
-            if _row_cap['capex_annuel (k€)'] > 0:
-                _cap_df.loc[_hotel, 'capex_annuel'] = _row_cap['capex_annuel (k€)'] * 1000
-            if _row_cap['gop (k€)'] > 0:
-                _cap_df.loc[_hotel, 'gop'] = _row_cap['gop (k€)'] * 1000
-
-        # Mettre à jour dea.df temporairement pour compute_capital_dea
-        _dea_df_orig = dea.df.copy()
-        dea.df = _cap_df
-        dea.has_surface = 'surface_m2' in _cap_df.columns and _cap_df['surface_m2'].sum() > 0
-        dea.has_capex   = 'capex_annuel' in _cap_df.columns and _cap_df['capex_annuel'].sum() > 0
-        dea.has_gop     = 'gop' in _cap_df.columns and _cap_df['gop'].sum() > 0
-
-        _cap_dea_df = dea.compute_capital_dea()
-        dea.df = _dea_df_orig  # restaurer
-
-        if _cap_dea_df is not None and not _cap_dea_df.empty:
-            st.dataframe(_cap_dea_df, use_container_width=True, hide_index=True)
-
-            # Scatter : DEA Opérationnel vs DEA Capital
-            _op_vals  = [dea.bcc_scores.get(h, 0) for h in _cap_dea_df['Hôtel']]
-            _cap_vals = [float(str(v).replace('%',''))/100 if isinstance(v, str) else v
-                         for v in _cap_dea_df['DEA Capital']]
-
-            fig_dea_cap = go.Figure()
-            for i, h in enumerate(_cap_dea_df['Hôtel']):
-                _op  = _op_vals[i]
-                _cap = _cap_vals[i] if isinstance(_cap_vals[i], float) else 0.0
-                _lecture = str(_cap_dea_df.iloc[i]['Lecture'])
-                _color = ('#27ae60' if 'bien' in _lecture
-                          else '#f39c12' if 'modéré' in _lecture
-                          else '#e74c3c')
-                fig_dea_cap.add_trace(go.Scatter(
-                    x=[_op], y=[_cap],
-                    mode='markers+text', text=[h],
-                    textposition='top center', textfont=dict(size=8),
-                    marker=dict(size=11, color=_color, opacity=0.85),
-                    showlegend=False,
-                    hovertemplate=f"<b>{h}</b><br>DEA Opérationnel : {_op:.1%}<br>DEA Capital : {_cap:.1%}<br>{_lecture}<extra></extra>",
-                ))
-
-            # Diagonale
-            fig_dea_cap.add_shape(type='line', x0=0.3, y0=0.3, x1=1.0, y1=1.0,
-                                  line=dict(dash='dash', color='gray', width=1))
-            fig_dea_cap.add_annotation(x=0.95, y=0.97, text="Au-dessus = capital bien employé",
-                                       showarrow=False, font=dict(size=9, color='#27ae60'))
-            fig_dea_cap.add_annotation(x=0.95, y=0.60, text="En dessous = surcoût capital",
-                                       showarrow=False, font=dict(size=9, color='#e74c3c'))
-
-            fig_dea_cap.update_layout(
-                title="DEA Capital vs DEA Opérationnel — Efficience immobilière",
-                xaxis=dict(title="DEA Opérationnel (BCC)", range=[0.3, 1.08], tickformat='.0%'),
-                yaxis=dict(title="DEA Capital", range=[0.3, 1.08], tickformat='.0%'),
-                height=480, paper_bgcolor='rgba(0,0,0,0)',
-            )
-            st.plotly_chart(fig_dea_cap, use_container_width=True)
-
-            # Alertes
-            _critiques = _cap_dea_df[_cap_dea_df['Lecture'].str.contains('sous-productif', na=False)]
-            if not _critiques.empty:
-                st.error(
-                    f"**Capital sous-productif détecté :** "
-                    + ", ".join(_critiques['Hôtel'].tolist())
-                    + " — Signal de renégociation de bail ou révision du plan CAPEX."
-                )
+    if has_any:
+    
+        st.markdown("---")
+        cap_rows = []
+        for hotel in dea.hotels:
+            row      = cap_input.loc[hotel]
+            surf     = float(row['surface_m2']); capex_ke = float(row['capex_annuel (k€)'])
+            gop_ke   = float(row['gop (k€)']);   stars    = int(row['classement (★)'])
+            lits     = float(dea.df.loc[hotel, 'nb_lits']); revpar = float(dea.df.loc[hotel, 'revpar'])
+            to       = float(dea.df.loc[hotel, 'taux_occupation']) / 100
+            goppam   = round(gop_ke * 1000 / surf, 2)    if surf > 0    else None
+            capex_ch = round(capex_ke * 1000 / lits, 0)  if lits > 0    else None
+            rev_est  = revpar * to * 365 * lits
+            rendement= round(rev_est / (capex_ke * 1000), 2) if capex_ke > 0 else None
+            ft       = FT_BENCH.get(stars, FT_DEFAULT)
+            slack_r  = dea.slacks.get(hotel, {}).get('outputs', {}).get('revpar', 0)
+            up_gop   = round(slack_r * lits * 365 * ft / 1_000_000, 3) if slack_r > 0 else 0
+            gop_margin = round(gop_ke * 1000 / rev_est * 100, 1) if gop_ke > 0 and rev_est > 0 else None
+            cap_rows.append({
+                'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel, 0):.1%}", 'Classement': '★' * stars,
+                'Surface (m²)': int(surf) if surf > 0 else '—',
+                'm²/chambre': round(surf/lits,1) if surf>0 and lits>0 else '—',
+                'CAPEX/chambre (k€)': round(capex_ch/1000,1) if capex_ch else '—',
+                'Rendement CAPEX (x)': rendement if rendement else '—',
+                'GOP (k€)': gop_ke if gop_ke > 0 else '—',
+                'Marge GOP %': f"{gop_margin:.1f}%" if gop_margin else '—',
+                'GOPPAM (€/m²)': goppam if goppam else '—',
+                'FT% benchmark': f"{ft:.0%}",
+                'Upside GOP /FT (M€/an)': up_gop if up_gop > 0 else '—',
+            })
+        cap_df = pd.DataFrame(cap_rows)
+    
+        c1, c2, c3, c4 = st.columns(4)
+        goppam_vals = [r['GOPPAM (€/m²)'] for r in cap_rows if r['GOPPAM (€/m²)'] != '—']
+        capex_vals  = [r['CAPEX/chambre (k€)'] for r in cap_rows if r['CAPEX/chambre (k€)'] != '—']
+        margin_vals = [float(r['Marge GOP %'].replace('%','')) for r in cap_rows if r['Marge GOP %'] != '—']
+        upside_vals = [r['Upside GOP /FT (M€/an)'] for r in cap_rows if r['Upside GOP /FT (M€/an)'] != '—']
+        with c1:
+            if goppam_vals: st.metric("GOPPAM moyen", f"{sum(goppam_vals)/len(goppam_vals):.2f} €/m²")
+        with c2:
+            if capex_vals:  st.metric("CAPEX/ch moyen", f"{sum(capex_vals)/len(capex_vals):.1f} k€")
+        with c3:
+            if margin_vals: st.metric("Marge GOP moyenne", f"{sum(margin_vals)/len(margin_vals):.1f}%")
+        with c4:
+            if upside_vals: st.metric("Upside GOP total /FT", f"{sum(upside_vals):.2f} M€/an")
+    
+        st.dataframe(cap_df, use_container_width=True, hide_index=True)
+    
+        col_l, col_r = st.columns(2)
+        with col_l:
+            plot_data = [(r['Hôtel'], r['GOPPAM (€/m²)'], r['CAPEX/chambre (k€)'], dea.bcc_scores.get(r['Hôtel'],0))
+                         for r in cap_rows if r['GOPPAM (€/m²)'] != '—' and r['CAPEX/chambre (k€)'] != '—']
+            if plot_data:
+                fig_cap = go.Figure()
+                for h, gop_, capx, bcc in plot_data:
+                    color = '#27ae60' if bcc>=0.90 else '#f39c12' if bcc>=0.80 else '#e74c3c'
+                    fig_cap.add_trace(go.Scatter(
+                        x=[capx], y=[gop_], mode='markers+text', text=[h], textposition='top center',
+                        textfont=dict(size=8), marker=dict(size=10+bcc*8, color=color, opacity=0.8),
+                        showlegend=False,
+                    ))
+                fig_cap.update_layout(xaxis=dict(title="CAPEX annuel / chambre (k€)"),
+                                      yaxis=dict(title="GOPPAM (€/m²)"),
+                                      height=400, paper_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig_cap, use_container_width=True)
+        with col_r:
+            margin_data = [(r['Hôtel'], float(r['Marge GOP %'].replace('%','')), dea.bcc_scores.get(r['Hôtel'],0))
+                           for r in cap_rows if r['Marge GOP %'] != '—']
+            if margin_data:
+                fig_gop = go.Figure()
+                for h, margin, bcc in margin_data:
+                    color = '#27ae60' if bcc>=0.90 else '#f39c12' if bcc>=0.80 else '#e74c3c'
+                    fig_gop.add_trace(go.Scatter(
+                        x=[bcc], y=[margin], mode='markers+text', text=[h], textposition='top center',
+                        textfont=dict(size=8), marker=dict(size=11, color=color, opacity=0.8), showlegend=False,
+                    ))
+                fig_gop.update_layout(xaxis=dict(title="Score BCC", tickformat='.0%', range=[0.3,1.05]),
+                                      yaxis=dict(title="Marge GOP %"),
+                                      height=400, paper_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig_gop, use_container_width=True)
+    
+        st.markdown("---")
+        upside_rows = []
+        for r in cap_rows:
+            hotel  = r['Hôtel']; stars  = int(cap_input.loc[hotel,'classement (★)'])
+            ft     = FT_BENCH.get(stars, FT_DEFAULT)
+            slk_r  = dea.slacks.get(hotel,{}).get('outputs',{}).get('revpar', 0)
+            lits   = float(dea.df.loc[hotel, 'nb_lits'])
+            up_rev = round(slk_r * lits * 365 / 1_000_000, 3)
+            up_gop = round(up_rev * ft, 3)
+            upside_rows.append({
+                'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel,0):.1%}",
+                'Classement': '★' * stars, 'FT% benchmark': f"{ft:.0%}",
+                'Slack RevPAR (€)': round(slk_r,1) if slk_r > 0 else '—',
+                'Upside Revenu brut (M€)': up_rev if up_rev > 0 else '—',
+                'Upside GOP /FT (M€)': up_gop if up_gop > 0 else '—',
+                'Priorité': ('🔴 Urgent' if up_gop>1.5 else '🟡 Moyen' if up_gop>0.5
+                             else '✅ RAS' if up_gop==0 else '🟢 Faible'),
+            })
+        upside_df = pd.DataFrame(upside_rows)
+        upside_df['_sort'] = pd.to_numeric(upside_df['Upside GOP /FT (M€)'], errors='coerce')
+        upside_df = upside_df.sort_values('_sort', ascending=False, na_position='last').drop(columns=['_sort'])
+        st.dataframe(upside_df, use_container_width=True, hide_index=True)
+    
+    
+        # ── DEA Capital vs DEA Opérationnel ─────────────────────────────────
+        st.markdown('<p class="section-title">DEA Capital vs DEA Opérationnel</p>', unsafe_allow_html=True)
+        st.caption(
+            "Score opérationnel (BCC) = efficience de gestion. "
+            "Score capital (DEA sur surface + CAPEX → GOP + CA) = efficience du capital immobilisé. "
+            "Au-dessus de la diagonale : capital bien employé. "
+            "En dessous : surcoût immobilier ou CAPEX mal alloué — signal de renégociation de bail ou révision plan CAPEX."
+        )
+    
+        # Préparer les données capital depuis cap_input
+        _has_cap_data = (cap_input[['surface_m2','capex_annuel (k€)']].sum().sum() > 0)
+    
+        if not _has_cap_data:
+            st.info("Renseigner **surface_m2** et **capex_annuel** dans le tableau ci-dessus pour activer le DEA Capital.")
         else:
-            st.info("Données capital insuffisantes pour le calcul DEA Capital (surface + CAPEX + revenus requis).")
-
-    # Expense Flex (Russo & Legel p.33)
-    st.markdown('<p class="section-title">Expense Flex & Flow Through</p>', unsafe_allow_html=True)
-    st.caption('Flow Through = delta_GOP / delta_CA | Expense Flex = 1 - FT quand CA baisse | Cible standard 50%')
-
-    col_fx1, col_fx2 = st.columns(2)
-    with col_fx1:
-        base_revpar_ft = st.number_input('RevPAR baseline N-1 ou Budget (e)', value=0.0, step=1.0, key='ft_revpar')
-    with col_fx2:
-        base_gop_pct_ft = st.number_input('Marge GOP% baseline (%)', value=35.0, step=0.5, key='ft_gop')
-
-    flex_rows = []
-    for r in cap_rows:
-        hotel_ft = r['Hôtel']
-        stars_ft = int(cap_input.loc[hotel_ft, 'classement (★)'])
-        ft_bench_ft = FT_BENCH.get(stars_ft, FT_DEFAULT)
-        lits_ft  = float(dea.df.loc[hotel_ft, 'nb_lits'])
-        revpar_ft = float(dea.df.loc[hotel_ft, 'revpar'])
-        ca_ft    = revpar_ft * lits_ft * 365
-
-        if base_revpar_ft > 0 and base_gop_pct_ft > 0:
-            ca_base_ft  = base_revpar_ft * lits_ft * 365
-            gop_base_ft = ca_base_ft * base_gop_pct_ft / 100
-            gop_h_ft = (float(cap_input.loc[hotel_ft, 'gop (k€)']) * 1000 if 'gop (k€)' in cap_input.columns and float(cap_input.loc[hotel_ft, 'gop (k€)']) > 0 else None)
-            delta_ca_ft  = ca_ft - ca_base_ft
-            if gop_h_ft is not None and abs(delta_ca_ft) > 0:
-                ft_val = round((gop_h_ft - gop_base_ft) / delta_ca_ft, 3)
-                flex_val = round(1 - ft_val, 3) if delta_ca_ft < 0 else None
-                src = 'Calcule'
+            # Construire un df temporaire pour compute_capital_dea
+            _cap_df = dea.df.copy()
+            for _hotel in dea.hotels:
+                _row_cap = cap_input.loc[_hotel]
+                if _row_cap['surface_m2'] > 0:
+                    _cap_df.loc[_hotel, 'surface_m2'] = _row_cap['surface_m2']
+                if _row_cap['capex_annuel (k€)'] > 0:
+                    _cap_df.loc[_hotel, 'capex_annuel'] = _row_cap['capex_annuel (k€)'] * 1000
+                if _row_cap['gop (k€)'] > 0:
+                    _cap_df.loc[_hotel, 'gop'] = _row_cap['gop (k€)'] * 1000
+    
+            # Mettre à jour dea.df temporairement pour compute_capital_dea
+            _dea_df_orig = dea.df.copy()
+            dea.df = _cap_df
+            dea.has_surface = 'surface_m2' in _cap_df.columns and _cap_df['surface_m2'].sum() > 0
+            dea.has_capex   = 'capex_annuel' in _cap_df.columns and _cap_df['capex_annuel'].sum() > 0
+            dea.has_gop     = 'gop' in _cap_df.columns and _cap_df['gop'].sum() > 0
+    
+            _cap_dea_df = dea.compute_capital_dea()
+            dea.df = _dea_df_orig  # restaurer
+    
+            if _cap_dea_df is not None and not _cap_dea_df.empty:
+                st.dataframe(_cap_dea_df, use_container_width=True, hide_index=True)
+    
+                # Scatter : DEA Opérationnel vs DEA Capital
+                _op_vals  = [dea.bcc_scores.get(h, 0) for h in _cap_dea_df['Hôtel']]
+                _cap_vals = [float(str(v).replace('%',''))/100 if isinstance(v, str) else v
+                             for v in _cap_dea_df['DEA Capital']]
+    
+                fig_dea_cap = go.Figure()
+                for i, h in enumerate(_cap_dea_df['Hôtel']):
+                    _op  = _op_vals[i]
+                    _cap = _cap_vals[i] if isinstance(_cap_vals[i], float) else 0.0
+                    _lecture = str(_cap_dea_df.iloc[i]['Lecture'])
+                    _color = ('#27ae60' if 'bien' in _lecture
+                              else '#f39c12' if 'modéré' in _lecture
+                              else '#e74c3c')
+                    fig_dea_cap.add_trace(go.Scatter(
+                        x=[_op], y=[_cap],
+                        mode='markers+text', text=[h],
+                        textposition='top center', textfont=dict(size=8),
+                        marker=dict(size=11, color=_color, opacity=0.85),
+                        showlegend=False,
+                        hovertemplate=f"<b>{h}</b><br>DEA Opérationnel : {_op:.1%}<br>DEA Capital : {_cap:.1%}<br>{_lecture}<extra></extra>",
+                    ))
+    
+                # Diagonale
+                fig_dea_cap.add_shape(type='line', x0=0.3, y0=0.3, x1=1.0, y1=1.0,
+                                      line=dict(dash='dash', color='gray', width=1))
+                fig_dea_cap.add_annotation(x=0.95, y=0.97, text="Au-dessus = capital bien employé",
+                                           showarrow=False, font=dict(size=9, color='#27ae60'))
+                fig_dea_cap.add_annotation(x=0.95, y=0.60, text="En dessous = surcoût capital",
+                                           showarrow=False, font=dict(size=9, color='#e74c3c'))
+    
+                fig_dea_cap.update_layout(
+                    title="DEA Capital vs DEA Opérationnel — Efficience immobilière",
+                    xaxis=dict(title="DEA Opérationnel (BCC)", range=[0.3, 1.08], tickformat='.0%'),
+                    yaxis=dict(title="DEA Capital", range=[0.3, 1.08], tickformat='.0%'),
+                    height=480, paper_bgcolor='rgba(0,0,0,0)',
+                )
+                st.plotly_chart(fig_dea_cap, use_container_width=True)
+    
+                # Alertes
+                _critiques = _cap_dea_df[_cap_dea_df['Lecture'].str.contains('sous-productif', na=False)]
+                if not _critiques.empty:
+                    st.error(
+                        f"**Capital sous-productif détecté :** "
+                        + ", ".join(_critiques['Hôtel'].tolist())
+                        + " — Signal de renégociation de bail ou révision du plan CAPEX."
+                    )
+            else:
+                st.info("Données capital insuffisantes pour le calcul DEA Capital (surface + CAPEX + revenus requis).")
+    
+        # Expense Flex (Russo & Legel p.33)
+        st.markdown('<p class="section-title">Expense Flex & Flow Through</p>', unsafe_allow_html=True)
+        st.caption('Flow Through = delta_GOP / delta_CA | Expense Flex = 1 - FT quand CA baisse | Cible standard 50%')
+    
+        col_fx1, col_fx2 = st.columns(2)
+        with col_fx1:
+            base_revpar_ft = st.number_input('RevPAR baseline N-1 ou Budget (e)', value=0.0, step=1.0, key='ft_revpar')
+        with col_fx2:
+            base_gop_pct_ft = st.number_input('Marge GOP% baseline (%)', value=35.0, step=0.5, key='ft_gop')
+    
+        flex_rows = []
+        for r in cap_rows:
+            hotel_ft = r['Hôtel']
+            stars_ft = int(cap_input.loc[hotel_ft, 'classement (★)'])
+            ft_bench_ft = FT_BENCH.get(stars_ft, FT_DEFAULT)
+            lits_ft  = float(dea.df.loc[hotel_ft, 'nb_lits'])
+            revpar_ft = float(dea.df.loc[hotel_ft, 'revpar'])
+            ca_ft    = revpar_ft * lits_ft * 365
+    
+            if base_revpar_ft > 0 and base_gop_pct_ft > 0:
+                ca_base_ft  = base_revpar_ft * lits_ft * 365
+                gop_base_ft = ca_base_ft * base_gop_pct_ft / 100
+                gop_h_ft = (float(cap_input.loc[hotel_ft, 'gop (k€)']) * 1000 if 'gop (k€)' in cap_input.columns and float(cap_input.loc[hotel_ft, 'gop (k€)']) > 0 else None)
+                delta_ca_ft  = ca_ft - ca_base_ft
+                if gop_h_ft is not None and abs(delta_ca_ft) > 0:
+                    ft_val = round((gop_h_ft - gop_base_ft) / delta_ca_ft, 3)
+                    flex_val = round(1 - ft_val, 3) if delta_ca_ft < 0 else None
+                    src = 'Calcule'
+                else:
+                    ft_val = ft_bench_ft; flex_val = None; src = 'Benchmark'
             else:
                 ft_val = ft_bench_ft; flex_val = None; src = 'Benchmark'
-        else:
-            ft_val = ft_bench_ft; flex_val = None; src = 'Benchmark'
-
-        slack_r_ft = dea.slacks.get(hotel_ft, {}).get('outputs', {}).get('revpar', 0)
-        driver_ft = 'Rate-driven' if slack_r_ft > 0 else 'Volume-driven'
-        if isinstance(ft_val, float):
-            if ft_val >= 0.60: ftq = '✅ Excellent'
-            elif ft_val >= 0.45: ftq = '🟡 Correct'
-            elif ft_val >= 0.30: ftq = '🟠 Faible'
-            else: ftq = '🔴 Tres faible'
-        else: ftq = '--'
-
-        flex_rows.append({
-            'Hôtel'          : hotel_ft,
-            'BCC'            : f"{dea.bcc_scores.get(hotel_ft,0):.1%}",
-            'Classement'     : '★' * stars_ft,
-            'Flow Through %' : f"{ft_val:.1%}" if isinstance(ft_val, float) else '--',
-            'Source'         : src,
-            'Qualite FT'     : ftq,
-            'Expense Flex %' : f"{flex_val:.1%}" if flex_val is not None else '--',
-            'Cible std'      : '50%',
-            'Ecart cible'    : f"{(ft_val - 0.50):+.1%}" if isinstance(ft_val, float) else '--',
-            'Driver revenu'  : driver_ft if src == 'Calcule' else '--',
-        })
-
-    st.dataframe(pd.DataFrame(flex_rows), use_container_width=True, hide_index=True)
-    st.info('FT > 50% = bonne conversion revenus -> profit. FT < 50% = charges variables elevees. Expense Flex calcule quand CA baisse.')
+    
+            slack_r_ft = dea.slacks.get(hotel_ft, {}).get('outputs', {}).get('revpar', 0)
+            driver_ft = 'Rate-driven' if slack_r_ft > 0 else 'Volume-driven'
+            if isinstance(ft_val, float):
+                if ft_val >= 0.60: ftq = '✅ Excellent'
+                elif ft_val >= 0.45: ftq = '🟡 Correct'
+                elif ft_val >= 0.30: ftq = '🟠 Faible'
+                else: ftq = '🔴 Tres faible'
+            else: ftq = '--'
+    
+            flex_rows.append({
+                'Hôtel'          : hotel_ft,
+                'BCC'            : f"{dea.bcc_scores.get(hotel_ft,0):.1%}",
+                'Classement'     : '★' * stars_ft,
+                'Flow Through %' : f"{ft_val:.1%}" if isinstance(ft_val, float) else '--',
+                'Source'         : src,
+                'Qualite FT'     : ftq,
+                'Expense Flex %' : f"{flex_val:.1%}" if flex_val is not None else '--',
+                'Cible std'      : '50%',
+                'Ecart cible'    : f"{(ft_val - 0.50):+.1%}" if isinstance(ft_val, float) else '--',
+                'Driver revenu'  : driver_ft if src == 'Calcule' else '--',
+            })
+    
+        st.dataframe(pd.DataFrame(flex_rows), use_container_width=True, hide_index=True)
+        st.info('FT > 50% = bonne conversion revenus -> profit. FT < 50% = charges variables elevees. Expense Flex calcule quand CA baisse.')
 
 # ══════════════════════════════════════════════
 # TAB 10 — BENCHMARK MARCHÉ
