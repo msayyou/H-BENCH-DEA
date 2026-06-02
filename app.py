@@ -1287,7 +1287,7 @@ with tab3:
                 except Exception as _e:
                     st.error(f"Erreur : {_e}")
 
-        if "se_results" in st.session_state:
+        if st.session_state.get("se_results") is not None:
             _se = st.session_state["se_results"]
             st.dataframe(_se, use_container_width=True, hide_index=True)
 
@@ -1328,7 +1328,7 @@ with tab3:
                 except Exception as _e:
                     st.error(f"Erreur : {_e}")
 
-        if "ce_results" in st.session_state:
+        if st.session_state.get("ce_results") is not None:
             _ce_df, _ce_matrix = st.session_state["ce_results"]
             st.dataframe(_ce_df[["Rang CE","Hôtel","BCC","Cross-Efficience","Δ BCC-CE","Lecture"]],
                          use_container_width=True, hide_index=True)
@@ -1385,13 +1385,18 @@ with tab3:
                 st.plotly_chart(fig_hm, use_container_width=True)
 
     # Tableau comparatif consolidé
-    if "se_results" in st.session_state and "ce_results" in st.session_state:
+    if st.session_state.get("se_results") is not None and st.session_state.get("ce_results") is not None:
         st.markdown("---")
         st.markdown('<p class="section-title">Tableau de Décision Consolidé — BCC · Super-Eff. · Cross-Eff. · TOPSIS</p>', unsafe_allow_html=True)
         st.caption("Doyle & Green (1994) ; Andersen & Petersen (1993) — Un actif robuste est performant sur les 4 dimensions.")
 
-        _se_d = st.session_state["se_results"].set_index("Hôtel")
-        _ce_d = st.session_state["ce_results"][0].set_index("Hôtel")
+        _se_d = st.session_state.get("se_results")
+        _ce_d = st.session_state.get("ce_results")
+        if _se_d is None or _ce_d is None:
+            st.info("Calculez SE et CE d'abord.")
+        else:
+          _se_d = _se_d.set_index("Hôtel")
+          _ce_d = _ce_d[0].set_index("Hôtel")
         _consol = []
         for h in dea.hotels:
             _consol.append({
@@ -1877,7 +1882,7 @@ with tab8:
             except Exception as _e:
                 st.error(f"Erreur bootstrap : {_e}")
 
-    if 'meta_bootstrap' in st.session_state and st.session_state['meta_bootstrap'] is not None:
+    if st.session_state.get('meta_bootstrap') is not None:
         _bdf = st.session_state['meta_bootstrap']
         _boot_cols = ['Hôtel', 'Groupe', 'GTE', 'GTE IC bas', 'GTE IC haut',
                       'MTE', 'MTE IC bas', 'MTE IC haut',
