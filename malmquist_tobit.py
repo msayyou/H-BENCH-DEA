@@ -283,3 +283,246 @@ def compute_tobit(
         'X'          : X_raw,
         'env_vars'   : env_vars,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MDEA ROOM / F&B DECOMPOSITION — Yu (2012)
+# ══════════════════════════════════════════════════════════════════════════════
+
+MDEA_COL_MAP = {
+    # Division Rooms
+    'room': {
+        'inputs' : ['rooms_cost', 'nb_lits'],
+        'outputs': ['rooms_revenue'],
+        'label'  : 'Hébergement (Rooms)',
+    },
+    # Division F&B
+    'fb': {
+        'inputs' : ['fb_cost'],
+        'outputs': ['fb_revenue'],
+        'label'  : 'Restauration (F&B)',
+    },
+    # Shared inputs (utilisés dans les deux)
+    'shared_inputs' : ['payroll_total', 'undistributed_expenses'],
+    # Common output
+    'common_outputs': ['other_dept_revenue'],
+}
+
+def _bcc_input(j: int, X: np.ndarray, Y: np.ndarray) -> float | None:
+    """BCC input-orienté. Retourne theta ∈ ]0,1]."""
+    n, m_in = X.shape; m_out = Y.shape[1]
+    mp  = pulp.LpProblem(f"BCC_{j}", pulp.LpMinimize)
+    th  = pulp.LpVariable("theta", lowBound=0)
+    lam = pulp.LpVariable.dicts("lam", range(n), lowBound=0)
+    mp += th
+    for i in range(m_in):
+        mp += pulp.lpSum(lam[k] * X[k, i] for k in range(n)) <= th * X[j, i]
+    for r in range(m_out):
+        mp += pulp.lpSum(lam[k] * Y[k, r] for k in range(n)) >= Y[j, r]
+    mp += pulp.lpSum(lam.values()) == 1
+    mp.solve(pulp.PULP_CBC_CMD(msg=False))
+    return round(float(pulp.value(th)), 4) if mp.status == 1 else None
+
+
+def compute_mdea_room_fb(dea) -> dict:
+    """
+    Décomposition MDEA Room / F&B selon Yu (2012).
+
+    Calcule trois scores BCC indépendants :
+      - BCC Global     : modèle standard DEA-H
+      - BCC Room       : efficience du département Hébergement
+      - BCC F&B        : efficience du département Restauration
+    
+    L'écart entre BCC Room et BCC F&B localise la source d'inefficience
+    — réplication simplifiée de la décomposition MDEA/GAR (Yu 2012, Eq. 3-6).
+    
+    Inputs Room  : rooms_cost + nb_lits
+    Inputs F&B   : fb_cost (+ fb_area si disponible)
+    Outputs Room : rooms_revenue
+    Outputs F&B  : fb_revenue
+    Shared       : payroll_total, undistributed_expenses (informatif)
+    
+    Réf. : Yu, M.-M. (2012) Current Issues in Tourism 15(5), 461-476
+           Jahanshahloo, Amirteimoori & Kordrostami (2004)
+           Mann-Whitney test : Yu Table 4-5 (non-parametric)
+    
+    Returns dict avec :
+        'scores'      : pd.DataFrame scores par hôtel
+        'feasible'    : bool
+        'missing_cols': list colonnes manquantes
+        'summary'     : pd.DataFrame résumé Room vs F&B
+        'mw_test'     : dict Mann-Whitney entre divisions
+    """
+    from scipy import stats as _stats
+
+    df = dea.df
+    hotels = dea.hotels
+
+    # Détection colonnes disponibles
+    room_in_avail  = [c for c in MDEA_COL_MAP['room']['inputs']   if c in df.columns]
+    room_out_avail = [c for c in MDEA_COL_MAP['room']['outputs']  if c in df.columns]
+    fb_in_avail    = [c for c in MDEA_COL_MAP['fb']['inputs']     if c in df.columns]
+    fb_out_avail   = [c for c in MDEA_COL_MAP['fb']['outputs']    if c in df.columns]
+
+    missing = []
+    if not room_in_avail  : missing += MDEA_COL_MAP['room']['inputs']
+    if not room_out_avail : missing += MDEA_COL_MAP['room']['outputs']
+    if not fb_in_avail    : missing += MDEA_COL_MAP['fb']['inputs']
+    if not fb_out_avail   : missing += MDEA_COL_MAP['fb']['outputs']
+
+    if missing:
+        return {'feasible': False, 'missing_cols': list(set(missing)),
+                'scores': pd.DataFrame(), 'summary': pd.DataFrame(), 'mw_test': {}}
+
+    X_room = df[room_in_avail].values.astype(float)
+    Y_room = df[room_out_avail].values.astype(float)
+    X_fb   = df[fb_in_avail].values.astype(float)
+    Y_fb   = df[fb_out_avail].values.astype(float)
+
+    # Colonnes partagées disponibles (pour info seulement)
+    shared_avail = [c for c in MDEA_COL_MAP['shared_inputs'] if c in df.columns]
+
+    rows = []
+    scores_room = []; scores_fb = []
+
+    for j, hotel in enumerate(hotels):
+        bcc_g = dea.bcc_scores.get(hotel, None)
+        er    = _bcc_input(j, X_room, Y_room)
+        ef    = _bcc_input(j, X_fb, Y_fb)
+
+        if er is not None: scores_room.append(er)
+        if ef is not None: scores_fb.append(ef)
+
+        # Diagnostic source d'inefficience
+        if er is not None and ef is not None:
+            delta = round(ef - er, 4)
+            if er < 0.85 and ef >= 0.90:
+                source = '🏨 Room sous-performant'
+            elif ef < 0.85 and er >= 0.90:
+                source = '🍽️ F&B sous-performant'
+            elif er < 0.85 and ef < 0.85:
+                source = '🔴 Double inefficience'
+            else:
+                source = '✅ Équilibré'
+        else:
+            delta = None; source = '—'
+
+        rows.append({
+            'Hôtel'          : hotel,
+            'BCC Global'     : f"{bcc_g:.3f}" if bcc_g else '—',
+            'BCC Room'       : f"{er:.3f}" if er else '—',
+            'BCC F&B'        : f"{ef:.3f}" if ef else '—',
+            'Δ (F&B - Room)' : f"{delta:+.3f}" if delta is not None else '—',
+            'Source inefficience': source,
+            'Inputs Room'    : ', '.join(room_in_avail),
+            'Inputs F&B'     : ', '.join(fb_in_avail),
+        })
+
+    scores_df = pd.DataFrame(rows).sort_values(
+        'BCC Global', ascending=True,
+        key=lambda x: pd.to_numeric(x, errors='coerce')
+    ).reset_index(drop=True)
+
+    # Résumé statistique Room vs F&B
+    summary_rows = []
+    for label, vals in [('BCC Room', scores_room), ('BCC F&B', scores_fb)]:
+        if vals:
+            summary_rows.append({
+                'Division'  : label,
+                'Moyenne'   : round(np.mean(vals), 4),
+                'Médiane'   : round(np.median(vals), 4),
+                'Std'       : round(np.std(vals), 4),
+                'Min'       : round(np.min(vals), 4),
+                'Max'       : round(np.max(vals), 4),
+                'N < 0.85'  : sum(1 for v in vals if v < 0.85),
+                'N = 1.0'   : sum(1 for v in vals if v >= 0.999),
+            })
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    # Mann-Whitney test Room vs F&B (Yu 2012, Table 4-5)
+    mw_test = {}
+    if len(scores_room) >= 4 and len(scores_fb) >= 4:
+        stat, pval = _stats.mannwhitneyu(scores_room, scores_fb, alternative='two-sided')
+        mw_test = {
+            'stat'         : round(stat, 4),
+            'p_value'      : round(pval, 4),
+            'significatif' : pval < 0.05,
+            'conclusion'   : (
+                f"Différence significative Room vs F&B (p={pval:.4f}) "
+                f"— {'Room' if np.mean(scores_room) < np.mean(scores_fb) else 'F&B'} "
+                f"est le département le moins efficient."
+                if pval < 0.05
+                else f"Pas de différence significative Room vs F&B (p={pval:.4f})"
+            ),
+            'test'         : 'Mann-Whitney U (Yu 2012, Table 4-5)',
+            'note'         : 'Test non-paramétrique recommandé pour scores DEA (censurés en 1.0)',
+        }
+
+    return {
+        'feasible'    : True,
+        'missing_cols': [],
+        'scores'      : scores_df,
+        'summary'     : summary_df,
+        'mw_test'     : mw_test,
+        'shared_used' : shared_avail,
+    }
+
+
+def mann_whitney_groups(dea, groups: pd.Series) -> dict:
+    """
+    Mann-Whitney U test entre groupes sur scores BCC.
+    Alternative non-paramétrique à l'ANOVA.
+    Recommandé pour scores DEA (Simar & Wilson 2007 ; Yu 2012).
+
+    Args:
+        dea    : HotelDEAAnalyzer
+        groups : pd.Series index=hotel_name, values=groupe
+
+    Returns: dict avec tableau comparaisons par paires
+    """
+    from scipy import stats as _stats
+    from itertools import combinations
+
+    unique_g = [g for g in groups.loc[dea.hotels].unique() if str(g) != 'nan']
+    grp_scores = {}
+    for g in unique_g:
+        h_list = [h for h in dea.hotels if groups.get(h) == g]
+        if len(h_list) >= 2:
+            grp_scores[g] = [dea.bcc_scores[h] for h in h_list]
+
+    if len(grp_scores) < 2:
+        return {'error': 'Moins de 2 groupes avec ≥ 2 DMUs'}
+
+    results = []
+    alpha_bonf = 0.05 / max(1, len(grp_scores) * (len(grp_scores) - 1) / 2)
+
+    for (g1, s1), (g2, s2) in combinations(grp_scores.items(), 2):
+        stat, pval = _stats.mannwhitneyu(s1, s2, alternative='two-sided')
+        results.append({
+            'Groupe A'     : g1,
+            'Groupe B'     : g2,
+            'N A'          : len(s1),
+            'N B'          : len(s2),
+            'Moy. BCC A'   : round(np.mean(s1), 4),
+            'Moy. BCC B'   : round(np.mean(s2), 4),
+            'U-stat'       : round(stat, 3),
+            'p-value'      : round(pval, 4),
+            'Bonf. α'      : round(alpha_bonf, 4),
+            'Sig.*'        : '***' if pval < 0.01 else '**' if pval < 0.05 else '*' if pval < 0.10 else 'ns',
+            'Verdict'      : (f"{g1} > {g2}" if np.mean(s1) > np.mean(s2) else f"{g2} > {g1}")
+                             if pval < 0.05 else 'Pas de différence significative',
+        })
+
+    return {
+        'pairs'       : pd.DataFrame(results),
+        'test'        : 'Mann-Whitney U (bilatéral, correction Bonferroni)',
+        'ref'         : 'Yu (2012) Table 4-5 ; Simar & Wilson (2007)',
+        'alpha_bonf'  : round(alpha_bonf, 4),
+        'n_groupes'   : len(grp_scores),
+        'summary'     : pd.DataFrame([
+            {'Groupe': g, 'N': len(s), 'Moy. BCC': round(np.mean(s),4),
+             'Med. BCC': round(np.median(s),4), 'Std': round(np.std(s),4)}
+            for g, s in grp_scores.items()
+        ]).sort_values('Moy. BCC', ascending=False),
+    }
