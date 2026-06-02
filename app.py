@@ -1,5 +1,5 @@
 """
-app.py — DEA-H v3.4
+app.py — DEA-H v3.8
 Application Streamlit : Analyse DEA BCC/CCR pour Asset Management Hôtelier
 11 onglets : Board | KPIs | TOPSIS | K-means | Quadrants | Slacks | Fiche Actif
            | Metafrontière | Capital & Flow Through | Benchmark Marché
@@ -20,6 +20,8 @@ from dea_model import HotelDEAAnalyzer, QUADRANT_LABELS
 from modules_config import MODULES, check_module_feasibility
 from dea_model import run_multi_module
 from synthesis_tab import render_synthesis_tab, render_module_selector
+from pdf_fiche_actif import generate_fiche_actif_pdf
+from malmquist_tobit import compute_malmquist, compute_tobit, has_n1_cols
 
 warnings.filterwarnings('ignore')
 
@@ -77,12 +79,22 @@ st.markdown('<p class="sub-header">Analyse d\'efficacité BCC/CCR · TOPSIS · K
 # ─────────────────────────────────────────────
 #  Session state init (multi-module)
 # ─────────────────────────────────────────────
+if "se_results" not in st.session_state:
+    st.session_state["se_results"] = None
+if "ce_results" not in st.session_state:
+    st.session_state["ce_results"] = None
+if "malmquist_results" not in st.session_state:
+    st.session_state["malmquist_results"] = None
+if "tobit_results" not in st.session_state:
+    st.session_state["tobit_results"] = None
 if "module_results" not in st.session_state:
     st.session_state["module_results"] = {}
 if "active_modules_mm" not in st.session_state:
     st.session_state["active_modules_mm"] = []
 if "variable_overrides_mm" not in st.session_state:
     st.session_state["variable_overrides_mm"] = {}
+if "_csv_hash" not in st.session_state:
+    st.session_state["_csv_hash"] = None
 
 # ─────────────────────────────────────────────
 #  Sidebar
@@ -93,6 +105,11 @@ with st.sidebar:
     st.subheader("💼 Paramètres économiques")
     avg_salary   = st.number_input("Coût FTE (€/an)",           value=35_000, step=5_000, format="%i")
     revpar_value = st.number_input("Valeur 1 pt RevPAR (€/an)", value=1_000,  step=100,   format="%i")
+    jours_exploit = st.number_input(
+        "Jours d'exploitation / an",
+        value=365, min_value=30, max_value=365, step=1, format="%i",
+        help="Resort saisonnier : 180-240 | Urban : 340-365. Corrige PAR, GOPPAM, TREVPAR."
+    )
 
     st.markdown("---")
     st.subheader("📐 Seuils Quadrants")
@@ -108,6 +125,21 @@ with st.sidebar:
                                else "📤 Output-Oriented (plan croissance)",
         help="Input : 'De combien réduire les ressources ?' / Output : 'De combien augmenter les revenus ?' (Barros, 2005)",
     )
+
+    st.markdown("---")
+    with st.expander("⚖️ Poids TOPSIS (Cornell methodology)", expanded=False):
+        st.caption("Charnes et al. (1978) — Somme des poids = 1. Défaut Cornell : BCC 35% · Scale 25% · RevPAR 25% · TO 15%")
+        _w_bcc    = st.slider("BCC (Gestion pure)",   0.0, 1.0, 0.35, 0.05, key='w_bcc')
+        _w_scale  = st.slider("Scale Efficiency",     0.0, 1.0, 0.25, 0.05, key='w_scale')
+        _w_revpar = st.slider("RevPAR",               0.0, 1.0, 0.25, 0.05, key='w_revpar')
+        _w_to     = st.slider("Taux d'occupation",   0.0, 1.0, 0.15, 0.05, key='w_to')
+        _w_sum    = _w_bcc + _w_scale + _w_revpar + _w_to
+        _w_bcc    = _w_bcc / _w_sum if _w_sum > 0 else 0.35
+        _w_scale  = _w_scale / _w_sum if _w_sum > 0 else 0.25
+        _w_revpar = _w_revpar / _w_sum if _w_sum > 0 else 0.25
+        _w_to     = _w_to / _w_sum if _w_sum > 0 else 0.15
+        st.caption(f"Poids normalisés : BCC {_w_bcc:.0%} · Scale {_w_scale:.0%} · RevPAR {_w_revpar:.0%} · TO {_w_to:.0%}")
+    topsis_weights = [_w_bcc, _w_scale, _w_revpar, _w_to]
 
     st.markdown("---")
     uploaded_file = st.file_uploader(
@@ -152,6 +184,11 @@ if uploaded_file is not None:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df = df.dropna(subset=NUMERIC_COLS)
     st.sidebar.success(f"✅ {len(df)} hôtels chargés (séparateur : '{sep}')")
+    # Invalidation cache si CSV change
+    _new_hash = hash(raw[:2000] + str(len(df)))
+    if st.session_state.get('_csv_hash') != _new_hash:
+        st.session_state['module_results'] = {}
+        st.session_state['_csv_hash'] = _new_hash
 elif use_sample:
     df = load_sample()
     st.sidebar.info("📋 Données d'exemple chargées")
@@ -271,6 +308,7 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         dea.kmeans_clusters = {}; dea.kmeans_labels    = {}
         dea.quadrants       = {}; dea.trevpar          = {}; dea.goppam           = {}
         dea.capital_metrics = {}
+        dea._topsis_weights = topsis_weights
         dea._run_analysis()
         dea._compute_quadrants(bcc_threshold=bcc_threshold, scale_threshold=scale_threshold)
         board = dea.generate_board_report(avg_salary=avg_salary, revpar_value=revpar_value)
@@ -344,7 +382,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.t
     "🔍 Fiche Actif",
     "🌐 Metafrontière",
     "💰 Capital & Flow Through",
-    "📊 Benchmark Marché",
+    "📊 Benchmark Marché & Dynamique",
     "🔀 Synthese Multi-Module",
     "📊 Variance Budget",
 ])
@@ -353,6 +391,13 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.t
 # TAB 1 — RAPPORT BOARD
 # ══════════════════════════════════════════════
 with tab1:
+    # Alerte ratio DMUs/variables
+    if getattr(dea, '_dmu_ratio_warning', False):
+        st.warning(
+            f"⚠️ **Ratio DMUs/variables insuffisant** : {dea._dmu_ratio_info} — "
+            "Scores DEA potentiellement sur-efficients. Augmentez le compset ou réduisez les variables. "
+            "Réf. : Poldrugovac et al. (2016), Färe et al. (1994), Tobin (1958) ; Raab & Lichty (2002)."
+        )
     st.markdown('<p class="section-title">📋 Rapport Stratégique — Comité d\'Investissement</p>', unsafe_allow_html=True)
     st.dataframe(board, use_container_width=True, hide_index=True)
     st.markdown('<p class="section-title">Répartition par Quadrant</p>', unsafe_allow_html=True)
@@ -361,7 +406,7 @@ with tab1:
 
     # ── Détection outliers Mahalanobis (Poldrugovac et al. 2016) ─────────────────────
     st.markdown('<p class="section-title">Détection Outliers — Distance de Mahalanobis</p>', unsafe_allow_html=True)
-    st.caption("Poldrugovac et al. (2016) ; Kerstens (1996) — D² suit une loi χ² à k degrés de liberté. Outlier si p < 0.01. Exclure les outliers avant interprétation des scores DEA.")
+    st.caption("Poldrugovac et al. (2016), Färe et al. (1994), Tobin (1958) ; Kerstens (1996) — D² suit une loi χ² à k degrés de liberté. Outlier si p < 0.01. Exclure les outliers avant interprétation des scores DEA.")
 
     _mah_df = dea.detect_outliers_mahalanobis(threshold_p=0.01)
     _n_outliers = _mah_df['Outlier'].sum()
@@ -470,11 +515,184 @@ with tab3:
     )
     st.plotly_chart(fig_radar, use_container_width=True)
 
+    # ── Super-Efficience & Cross-Efficience ──────────────────────────────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">Super-Efficience & Cross-Efficience — Discrimination avancée</p>', unsafe_allow_html=True)
+
+    _adv_col1, _adv_col2 = st.columns(2)
+
+    with _adv_col1:
+        st.markdown("**Super-Efficience — Andersen & Petersen (1993)**")
+        st.caption(
+            "Les DMUs efficients (BCC=1) reçoivent un score > 1 : "
+            "ils pourraient consommer plus d'inputs tout en restant hors de la frontière "
+            "construite sans eux. Permet de classer le **top portfolio**."
+        )
+        if st.button("Calculer Super-Efficience", key="se_btn"):
+            with st.spinner("Calcul super-efficience..."):
+                try:
+                    _se_df = dea.compute_super_efficiency()
+                    st.session_state["se_results"] = _se_df
+                except Exception as _e:
+                    st.error(f"Erreur : {_e}")
+
+        if "se_results" in st.session_state:
+            _se = st.session_state["se_results"]
+            st.dataframe(_se, use_container_width=True, hide_index=True)
+
+            # Bar chart super-efficience
+            _se_num = _se.copy()
+            _se_num["_se_val"] = _se_num["Super-Efficience"].str.replace("%","").astype(float)
+            fig_se = go.Figure(go.Bar(
+                x=_se_num["_se_val"], y=_se_num["Hôtel"], orientation="h",
+                marker=dict(
+                    color=_se_num["_se_val"],
+                    colorscale=[[0,"#e74c3c"],[0.7,"#f39c12"],[0.999,"#f1c40f"],[1.0,"#27ae60"],[1.5,"#1a8a4a"]],
+                    cmin=0.3, cmax=1.5, showscale=True,
+                    colorbar=dict(title="Score SE"),
+                ),
+                text=_se_num["Super-Efficience"], textposition="outside",
+            ))
+            fig_se.add_vline(x=1.0, line_dash="dash", line_color="#27ae60",
+                             annotation_text="Frontière BCC", annotation_font_color="#27ae60")
+            fig_se.update_layout(
+                title="Super-Efficience (> 1.0 = au-delà de la frontière)",
+                xaxis=dict(range=[0.2, max(_se_num["_se_val"])*1.15]),
+                height=max(350, dea.n*28), paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_se, use_container_width=True)
+
+    with _adv_col2:
+        st.markdown("**Cross-Efficience — Doyle & Green (1994)**")
+        st.caption(
+            "Chaque DMU est évalué par les poids optimaux de TOUS ses pairs. "
+            "Élimine le choix arbitraire des poids. "
+            "Un score élevé signifie une efficience **robuste** indépendamment du système de poids choisi."
+        )
+        if st.button("Calculer Cross-Efficience", key="ce_btn"):
+            with st.spinner("Calcul cross-efficience (forme multiplicatrice BCC)..."):
+                try:
+                    _ce_df, _ce_matrix = dea.compute_cross_efficiency()
+                    st.session_state["ce_results"] = (_ce_df, _ce_matrix)
+                except Exception as _e:
+                    st.error(f"Erreur : {_e}")
+
+        if "ce_results" in st.session_state:
+            _ce_df, _ce_matrix = st.session_state["ce_results"]
+            st.dataframe(_ce_df[["Rang CE","Hôtel","BCC","Cross-Efficience","Δ BCC-CE","Lecture"]],
+                         use_container_width=True, hide_index=True)
+
+            # Scatter BCC vs Cross-Efficience
+            _ce_df_num = _ce_df.copy()
+            _ce_df_num["_bcc_f"] = _ce_df_num["BCC"].str.replace("%","").astype(float)/100
+            _ce_df_num["_ce_f"]  = _ce_df_num["Cross-Efficience"].astype(float)
+
+            fig_ce = go.Figure()
+            for _, r in _ce_df_num.iterrows():
+                _col = "#27ae60" if r["_bcc_f"]>=0.95 and r["_ce_f"]>=0.85 else                        "#e74c3c" if r["_bcc_f"]>=0.95 and r["_ce_f"]<0.75 else                        "#3498db"
+                fig_ce.add_trace(go.Scatter(
+                    x=[r["_bcc_f"]], y=[r["_ce_f"]],
+                    mode="markers+text", text=[r["Hôtel"]],
+                    textposition="top center", textfont=dict(size=8),
+                    marker=dict(size=12, color=_col), showlegend=False,
+                    hovertemplate=f"<b>{r['Hôtel']}</b><br>BCC: {r['_bcc_f']:.1%}<br>CE: {r['_ce_f']:.3f}<extra></extra>",
+                ))
+            # Diagonale
+            fig_ce.add_shape(type="line", x0=0.3, y0=0.3, x1=1.0, y1=1.0,
+                             line=dict(dash="dot", color="gray", width=1))
+            # Zones
+            fig_ce.add_annotation(x=0.98, y=0.95, text="Robuste ✅",
+                                   showarrow=False, font=dict(size=9, color="#27ae60"))
+            fig_ce.add_annotation(x=0.98, y=0.65, text="Fragile ⚠️",
+                                   showarrow=False, font=dict(size=9, color="#e74c3c"))
+            fig_ce.update_layout(
+                title="BCC vs Cross-Efficience — Robustesse des scores",
+                xaxis=dict(title="Score BCC", tickformat=".0%", range=[0.3,1.05]),
+                yaxis=dict(title="Cross-Efficience", range=[0.2,1.05]),
+                height=360, paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_ce, use_container_width=True)
+
+            # Heatmap de la matrice CE
+            with st.expander("🗺️ Matrice cross-efficience complète", expanded=False):
+                st.caption("Ligne j = poids du DMU j évaluant les colonnes k. Diagonale = auto-évaluation (score BCC).")
+                fig_hm = go.Figure(go.Heatmap(
+                    z=_ce_matrix.values,
+                    x=_ce_matrix.columns.tolist(),
+                    y=_ce_matrix.index.tolist(),
+                    colorscale="RdYlGn", zmin=0, zmax=1,
+                    text=[[f"{v:.2f}" for v in row] for row in _ce_matrix.values],
+                    texttemplate="%{text}", textfont=dict(size=8),
+                    colorbar=dict(title="CE Score"),
+                ))
+                fig_hm.update_layout(
+                    height=max(300, dea.n*30+80),
+                    margin=dict(l=120, r=20, t=30, b=80),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(tickangle=-45),
+                )
+                st.plotly_chart(fig_hm, use_container_width=True)
+
+    # Tableau comparatif consolidé
+    if "se_results" in st.session_state and "ce_results" in st.session_state:
+        st.markdown("---")
+        st.markdown('<p class="section-title">Tableau de Décision Consolidé — BCC · Super-Eff. · Cross-Eff. · TOPSIS</p>', unsafe_allow_html=True)
+        st.caption("Doyle & Green (1994) ; Andersen & Petersen (1993) — Un actif robuste est performant sur les 4 dimensions.")
+
+        _se_d = st.session_state["se_results"].set_index("Hôtel")
+        _ce_d = st.session_state["ce_results"][0].set_index("Hôtel")
+        _consol = []
+        for h in dea.hotels:
+            _consol.append({
+                "Hôtel"            : h,
+                "BCC"              : f"{dea.bcc_scores[h]:.1%}",
+                "Super-Eff."       : _se_d.loc[h, "Super-Efficience"] if h in _se_d.index else "—",
+                "Cross-Eff."       : _ce_d.loc[h, "Cross-Efficience"] if h in _ce_d.index else "—",
+                "Rang TOPSIS"      : f"#{dea.topsis_ranks.get(h,'—')}",
+                "Rang CE"          : f"#{int(_ce_d.loc[h, 'Rang CE'])}" if h in _ce_d.index else "—",
+                "Rang SE"          : f"#{int(_se_d.loc[h, 'Rang SE'])}" if h in _se_d.index else "—",
+                "Verdict"          : (
+                    "🟢 Leader confirmé"
+                    if dea.bcc_scores[h] >= 0.90
+                    and (float(_ce_d.loc[h,"Cross-Efficience"]) if h in _ce_d.index else 0) >= 0.80
+                    else "🟡 Efficient fragile"
+                    if dea.bcc_scores[h] >= 0.90
+                    else "🔴 Plan d'action requis"
+                ),
+            })
+        st.dataframe(pd.DataFrame(_consol), use_container_width=True, hide_index=True)
+
+        _csv_consol = pd.DataFrame(_consol).to_csv(index=False, sep=";", decimal=",")
+        st.download_button("⬇️ Exporter tableau consolidé (CSV)", data=_csv_consol.encode("utf-8-sig"),
+                           file_name="deah_ranking_consolide.csv", mime="text/csv")
+
+
 # ══════════════════════════════════════════════
 # TAB 4 — SEGMENTATION K-MEANS
 # ══════════════════════════════════════════════
 with tab4:
     st.markdown('<p class="section-title">🗂️ Segmentation K-means — 4 Clusters</p>', unsafe_allow_html=True)
+
+    # Silhouette score + méthode du coude
+    _sil = getattr(dea, 'kmeans_silhouette', None)
+    _inertias = getattr(dea, 'kmeans_inertias', {})
+    _sil_col1, _sil_col2 = st.columns(2)
+    with _sil_col1:
+        if _sil is not None:
+            _sil_label = 'excellent' if _sil > 0.7 else ('bon' if _sil > 0.5 else ('moyen' if _sil > 0.3 else 'faible'))
+            st.metric('Silhouette Score (k=4)', f'{_sil:.3f}',
+                      help='Rousseeuw (1987). >0.7=excellent | 0.5-0.7=bon | 0.3-0.5=moyen | <0.3=faible — remettre k en question')
+            st.caption(f'Qualité clustering : **{_sil_label}**')
+    with _sil_col2:
+        if _inertias:
+            # go already imported at top
+            _fig_elbow = _go.Figure(_go.Scatter(x=list(_inertias.keys()), y=list(_inertias.values()),
+                mode='lines+markers', marker=dict(color='#2e6da4')))
+            _fig_elbow.add_vline(x=4, line_dash='dash', line_color='red', annotation_text='k=4 actuel')
+            _fig_elbow.update_layout(title='Méthode du coude', xaxis_title='k', yaxis_title='Inertie',
+                height=200, margin=dict(t=30,b=20,l=40,r=20), paper_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(_fig_elbow, use_container_width=True)
+
     cluster_summary = dea.get_cluster_summary()
     st.dataframe(cluster_summary, use_container_width=True, hide_index=True)
 
@@ -650,9 +868,9 @@ with tab6:
             lits_h   = float(dea.df.loc[h, 'nb_lits'])
             revpar_h = float(dea.df.loc[h, 'revpar'])
             occ_h    = float(dea.df.loc[h, 'taux_occupation']) / 100
-            nights_h = lits_h * 365 * occ_h
-            ca_h     = revpar_h * lits_h * 365
-            par_h    = lits_h * 365
+            nights_h = lits_h * jours_exploit * occ_h
+            ca_h     = revpar_h * lits_h * jours_exploit
+            par_h    = lits_h * jours_exploit
 
             s_emp  = dea.slacks[h]['inputs'].get('nb_employes', 0)
             s_cost = dea.slacks[h]['inputs'].get('couts_op_ex', 0) * 1_000_000
@@ -765,6 +983,31 @@ with tab7:
     )
     st.plotly_chart(fig_pos, use_container_width=True)
 
+    # Export PDF Fiche Actif (P1.1)
+    st.markdown("---")
+    st.markdown('<p class="section-title">📥 Export PDF</p>', unsafe_allow_html=True)
+    if st.button('📄 Générer PDF Fiche Actif', key='pdf_btn'):
+        with st.spinner('Génération PDF...'):
+            try:
+                _pdf_bytes = generate_fiche_actif_pdf(
+                    hotel=selected, dea=dea,
+                    quadrant_labels=QUADRANT_LABELS,
+                    avg_salary=avg_salary,
+                    revpar_value=revpar_value,
+                    jours_exploit=jours_exploit,
+                )
+                if _pdf_bytes:
+                    st.download_button(
+                        '⬇️ Télécharger PDF Fiche Actif',
+                        data=_pdf_bytes,
+                        file_name=f'fiche_actif_{selected}_{datetime.now().strftime("%Y%m%d")}.pdf',
+                        mime='application/pdf',
+                    )
+                else:
+                    st.error('ReportLab non disponible — ajouter reportlab dans requirements.txt')
+            except Exception as _pdf_e:
+                st.error(f'Erreur PDF : {_pdf_e}')
+
 # ══════════════════════════════════════════════
 # TAB 8 — METAFRONTIÈRE
 # ══════════════════════════════════════════════
@@ -842,7 +1085,7 @@ with tab8:
     # ── ANOVA second stage (Poldrugovac 2016 ; Assaf 2009) ────────────────────────
     st.markdown("---")
     st.markdown('<p class="section-title">ANOVA Second Stage -- Differences efficience entre groupes</p>', unsafe_allow_html=True)
-    st.caption('Poldrugovac et al. (2016) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
+    st.caption('Poldrugovac et al. (2016), Färe et al. (1994), Tobin (1958) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
 
     try:
         _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
@@ -907,6 +1150,8 @@ with tab8:
         height=400, paper_bgcolor='rgba(0,0,0,0)',
     )
     st.plotly_chart(fig_ms, use_container_width=True)
+
+
 
 # ══════════════════════════════════════════════
 # TAB 9 — CAPITAL & FLOW THROUGH
@@ -973,11 +1218,11 @@ with tab9:
             to       = float(dea.df.loc[hotel, 'taux_occupation']) / 100
             goppam   = round(gop_ke * 1000 / surf, 2)    if surf > 0    else None
             capex_ch = round(capex_ke * 1000 / lits, 0)  if lits > 0    else None
-            rev_est  = revpar * to * 365 * lits
+            rev_est  = revpar * to * jours_exploit * lits
             rendement= round(rev_est / (capex_ke * 1000), 2) if capex_ke > 0 else None
             ft       = FT_BENCH.get(stars, FT_DEFAULT)
             slack_r  = dea.slacks.get(hotel, {}).get('outputs', {}).get('revpar', 0)
-            up_gop   = round(slack_r * lits * 365 * ft / 1_000_000, 3) if slack_r > 0 else 0
+            up_gop   = round(slack_r * lits * jours_exploit * ft / 1_000_000, 3) if slack_r > 0 else 0
             gop_margin = round(gop_ke * 1000 / rev_est * 100, 1) if gop_ke > 0 and rev_est > 0 else None
             cap_rows.append({
                 'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel, 0):.1%}", 'Classement': '★' * stars,
@@ -1414,6 +1659,265 @@ with tab10:
                      use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════
+    st.markdown('---')
+    st.markdown('<p class="section-title">🚀 Malmquist Productivity Index — Évolution temporelle</p>', unsafe_allow_html=True)
+    st.caption('Caves, Christensen & Diewert (1982) ; Fare et al. (1994) -- Catch-up x Frontier Shift = TFP total.')
+    st.markdown('<p class="section-title">🚀 Malmquist Productivity Index — Évolution temporelle</p>', unsafe_allow_html=True)
+    st.caption(
+        "Caves, Christensen & Diewert (1982) Econometrica ; "
+        "Färe, Grosskopf, Norris & Zhang (1994) American Economic Review. "
+        "Décompose la variation de productivité entre N-1 et N en deux effets : "
+        "Catch-up (gestion) × Frontier Shift (progrès sectoriel)."
+    )
+
+    # Vérifier colonnes N-1
+    _n1_present = has_n1_cols(dea.df)
+    _n1_required = ["revpar_n1", "nb_employes_n1", "couts_op_ex_n1",
+                    "taux_occupation_n1", "nb_lits_n1"]
+    _n1_missing  = [c for c in _n1_required if c not in dea.df.columns]
+
+    if _n1_missing:
+        _warn_msg = (
+            f"Colonnes N-1 manquantes : {', '.join(_n1_missing)}. "
+            "Ajoutez nb_lits_n1, nb_employes_n1, couts_op_ex_n1, "
+            "revpar_n1, taux_occupation_n1 (+ satisfaction_n1 optionnel) "
+            "a votre CSV pour activer le Malmquist."
+        )
+        st.warning(_warn_msg)
+    else:
+        st.success(f"✅ Colonnes N-1 détectées : {', '.join(_n1_present)}")
+
+        if st.button("🔄 Calculer Malmquist", key="mq_btn"):
+            with st.spinner("Calcul des 4 problèmes DEA par DMU..."):
+                try:
+                    _mq = compute_malmquist(dea)
+                    st.session_state["malmquist_results"] = _mq
+                    if _mq is not None:
+                        st.success(f"✅ Malmquist calculé — {len(_mq)} DMUs")
+                except Exception as _e:
+                    st.error(f"Erreur : {_e}")
+
+        if st.session_state.get("malmquist_results") is not None:
+            _mq = st.session_state["malmquist_results"]
+            st.dataframe(_mq, use_container_width=True, hide_index=True)
+
+            # Graphiques
+            _mq_num = _mq[_mq["Malmquist TFP"] != "—"].copy()
+            for c in ["Catch-up", "Frontier Shift", "Malmquist TFP"]:
+                _mq_num[c] = pd.to_numeric(_mq_num[c], errors="coerce")
+
+            if not _mq_num.empty:
+                _mc1, _mc2 = st.columns(2)
+
+                with _mc1:
+                    # Barres TFP
+                    _mq_s = _mq_num.sort_values("Malmquist TFP")
+                    fig_mq = go.Figure(go.Bar(
+                        x=_mq_s["Malmquist TFP"], y=_mq_s["Hôtel"], orientation="h",
+                        marker=dict(
+                            color=_mq_s["Malmquist TFP"],
+                            colorscale=[[0,"#e74c3c"],[0.5,"#f1c40f"],[1.0,"#2ecc71"]],
+                            cmin=0.8, cmax=1.2, showscale=True,
+                            colorbar=dict(title="TFP"),
+                        ),
+                        text=[f"{v:.3f}" for v in _mq_s["Malmquist TFP"]],
+                        textposition="outside",
+                    ))
+                    fig_mq.add_vline(x=1.0, line_dash="dash", line_color="#27ae60",
+                                     annotation_text="TFP = 1 (stable)")
+                    fig_mq.update_layout(
+                        title="Malmquist TFP (> 1 = progrès, < 1 = régression)",
+                        height=max(350, len(_mq_num)*28),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_mq, use_container_width=True)
+
+                with _mc2:
+                    # Scatter Catch-up vs Frontier Shift
+                    fig_decomp = go.Figure()
+                    for _, r in _mq_num.iterrows():
+                        _cu = r["Catch-up"]; _fs = r["Frontier Shift"]
+                        _col = ("#27ae60" if _cu >= 1 and _fs >= 1
+                                else "#e74c3c" if _cu < 1 and _fs < 1
+                                else "#f39c12")
+                        fig_decomp.add_trace(go.Scatter(
+                            x=[_cu], y=[_fs], mode="markers+text",
+                            text=[r["Hôtel"]], textposition="top center",
+                            textfont=dict(size=8),
+                            marker=dict(size=11, color=_col), showlegend=False,
+                            hovertemplate=(f"<b>{r['Hôtel']}</b><br>"
+                                          f"Catch-up: {_cu:.3f}<br>"
+                                          f"Frontier Shift: {_fs:.3f}<br>"
+                                          f"TFP: {r['Malmquist TFP']:.3f}<extra></extra>"),
+                        ))
+                    # Quadrants
+                    fig_decomp.add_hline(y=1, line_dash="dot", line_color="gray")
+                    fig_decomp.add_vline(x=1, line_dash="dot", line_color="gray")
+                    fig_decomp.add_annotation(x=1.08, y=1.08, text="Progrès total ✅",
+                        showarrow=False, font=dict(size=9, color="#27ae60"))
+                    fig_decomp.add_annotation(x=0.93, y=0.93, text="Régression totale 🔴",
+                        showarrow=False, font=dict(size=9, color="#e74c3c"))
+                    fig_decomp.add_annotation(x=0.93, y=1.08,
+                        text="Progrès sectoriel (frontière avance)", showarrow=False,
+                        font=dict(size=8, color="#3498db"))
+                    fig_decomp.add_annotation(x=1.08, y=0.93,
+                        text="Rattrapage (convergence)", showarrow=False,
+                        font=dict(size=8, color="#f39c12"))
+                    fig_decomp.update_layout(
+                        title="Décomposition : Catch-up × Frontier Shift",
+                        xaxis=dict(title="Catch-up (efficience)", zeroline=False),
+                        yaxis=dict(title="Frontier Shift (technologie)", zeroline=False),
+                        height=400, paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_decomp, use_container_width=True)
+
+                # Résumé portfolio
+                st.markdown("---")
+                _mc3, _mc4, _mc5 = st.columns(3)
+                _tfp_vals = _mq_num["Malmquist TFP"]
+                _mc3.metric("TFP moyen portfolio", f"{_tfp_vals.mean():.3f}",
+                            help="< 1 = régression globale | > 1 = progrès global")
+                _mc4.metric("DMUs en progrès (TFP>1)",
+                            f"{(_tfp_vals > 1).sum()}/{len(_tfp_vals)}")
+                _mc5.metric("Frontier Shift moyen",
+                            f"{_mq_num['Frontier Shift'].mean():.3f}",
+                            help="Progrès sectoriel indépendant de la gestion")
+
+                st.info(
+                    "Catch-up > 1 : hotel rattrape la frontiere = merite de gestion. "
+                    "Frontier Shift > 1 : frontiere avance = progres sectoriel. "
+                    "TFP = Catch-up x Frontier Shift. "
+                    "Cas optimal : TFP > 1 ET Catch-up > 1 = progres propre independant du marche."
+                )
+
+                # Export CSV
+                _csv_mq = _mq.to_csv(index=False, sep=";", decimal=",")
+                st.download_button(
+                    "⬇️ Exporter Malmquist (CSV)", data=_csv_mq.encode("utf-8-sig"),
+                    file_name="deah_malmquist.csv", mime="text/csv",
+                )
+
+
+
+    st.markdown('---')
+    st.markdown('''<p class="section-title">🧪 Tobit Second Stage -- Déterminants Efficience</p>''', unsafe_allow_html=True)
+    st.caption('Tobin (1958) ; Simar & Wilson (2007) -- Regression censuree en 1.0. Quantifie l\'effet marginal de chaque variable environnementale sur le score BCC.')
+    # ── Tobit Second Stage (Simar & Wilson 2007) ──────────────────────────────
+    st.markdown("---")
+    st.markdown('''<p class="section-title">🧪 Tobit Second Stage -- Déterminants Efficience</p>''', unsafe_allow_html=True)
+    st.caption(
+        "Régression Tobit censurée à droite en 1.0 sur les scores BCC. "
+        "Quantifie l'effet marginal de chaque variable environnementale sur l'efficience. "
+        "Réf. : Tobin (1958) Econometrica ; Simar & Wilson (2007) Journal of Econometrics."
+    )
+
+    # Sélection des régresseurs disponibles
+    _tobit_candidates = {
+        'classement_etoiles': 'Classement (★)',
+        'surface_m2'        : 'Surface totale (m²)',
+        'capex_annuel'      : 'CAPEX annuel (€)',
+        'nb_lits'           : 'Nombre de chambres',
+        'energy_kwh'        : 'Énergie consommée (kWh)',
+        'payroll_total'     : 'Masse salariale (€)',
+    }
+    _tobit_avail = {c: l for c, l in _tobit_candidates.items() if c in dea.df.columns}
+
+    # Variables du profil compset (session state Tab 10)
+    _cs_profile = st.session_state.get('compset_profile', pd.DataFrame())
+    _tobit_cs = {}
+    if not _cs_profile.empty:
+        if 'Localisation' in _cs_profile.columns:
+            _loc_dummies = pd.get_dummies(_cs_profile['Localisation'], prefix='loc')
+            for col in _loc_dummies.columns:
+                dea.df[col] = [_loc_dummies.loc[h, col] if h in _loc_dummies.index else 0
+                               for h in dea.hotels]
+                _tobit_cs[col] = col.replace('loc_', 'Loc. ')
+        if 'Gestion' in _cs_profile.columns:
+            _gest_dummies = pd.get_dummies(_cs_profile['Gestion'], prefix='gest')
+            for col in _gest_dummies.columns:
+                dea.df[col] = [_gest_dummies.loc[h, col] if h in _gest_dummies.index else 0
+                               for h in dea.hotels]
+                _tobit_cs[col] = col.replace('gest_', 'Gestion: ')
+
+    _all_tobit = {**_tobit_avail, **_tobit_cs}
+
+    if not _all_tobit:
+        st.info("Aucune variable environnementale disponible. Enrichissez le CSV avec `classement_etoiles`, `surface_m2`, etc. ou remplissez le Profil Compset (Tab 10).")
+    else:
+        _selected_env = st.multiselect(
+            "Variables environnementales (régresseurs)",
+            options=list(_all_tobit.keys()),
+            default=list(_all_tobit.keys())[:min(3, len(_all_tobit))],
+            format_func=lambda x: _all_tobit.get(x, x),
+            key='tobit_vars',
+        )
+
+        if _selected_env and st.button("Estimer modèle Tobit", key="tobit_btn"):
+            if len(_selected_env) >= len(dea.hotels) - 2:
+                st.error("Trop de régresseurs pour le nombre de DMUs. Réduisez la sélection.")
+            else:
+                with st.spinner("Estimation MLE Tobit..."):
+                    try:
+                        _tb = compute_tobit(
+                            dea,
+                            env_vars=_selected_env,
+                            env_labels=_all_tobit,
+                        )
+                        st.session_state["tobit_results"] = _tb
+                    except Exception as _e:
+                        st.error(f"Erreur Tobit : {_e}")
+
+        if st.session_state.get("tobit_results") and "error" not in st.session_state["tobit_results"]:
+            _tb = st.session_state["tobit_results"]
+            _tb_col1, _tb_col2 = st.columns([3, 1])
+            with _tb_col1:
+                st.markdown("**Résultats de la régression Tobit**")
+                st.dataframe(_tb["coef_df"], use_container_width=True, hide_index=True)
+                st.caption(
+                    "Sig. : *** p<0.01  ** p<0.05  * p<0.10  — "
+                    "Coefficients interprétés en variation du score BCC (0 à 1) "
+                    "toutes choses égales par ailleurs."
+                )
+            with _tb_col2:
+                st.metric("N observations", _tb["n"])
+                st.metric("N censurées (BCC=1)", _tb["n_censored"])
+                st.metric("Log-vraisemblance", _tb["log_lik"])
+                st.metric("σ (bruit)", _tb["sigma"])
+                st.metric("Convergence", "✅ Oui" if _tb["converged"] else "⚠️ Non")
+
+            # Bar chart des coefficients significatifs
+            _sig_coef = _tb["coef_df"][_tb["coef_df"]["Sig."] != ""].copy()
+            if not _sig_coef.empty and len(_sig_coef) > 1:
+                _sig_coef = _sig_coef[_sig_coef["Variable"] != "Constante"]
+                if not _sig_coef.empty:
+                    _coef_vals = pd.to_numeric(_sig_coef["Coeff."], errors="coerce")
+                    fig_tobit = go.Figure(go.Bar(
+                        x=_sig_coef["Variable"],
+                        y=_coef_vals,
+                        marker=dict(color=["#27ae60" if v > 0 else "#e74c3c"
+                                           for v in _coef_vals]),
+                        text=[f"{v:+.3f}{s}" for v, s in zip(_coef_vals, _sig_coef["Sig."])],
+                        textposition="outside",
+                    ))
+                    fig_tobit.add_hline(y=0, line_color="gray", line_width=1)
+                    fig_tobit.update_layout(
+                        title="Coefficients Tobit significatifs — impact sur BCC",
+                        yaxis=dict(title="Effet marginal sur score BCC", zeroline=True),
+                        height=350, paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_tobit, use_container_width=True)
+
+            st.info(
+                "**Lecture :** Un coefficient de +0.08 sur Classement(★) signifie que "
+                "chaque étoile supplémentaire améliore le score BCC de 0.08 points "
+                "toutes choses égales par ailleurs (ETP, charges, localisation inchangés). "
+                "Le Tobit corrige le biais d'estimation lié au plafond BCC=1.0 "
+                "(Simar & Wilson 2007)."
+            )
+        elif st.session_state.get("tobit_results") and "error" in st.session_state["tobit_results"]:
+            st.error(st.session_state["tobit_results"]["error"])
+
+
 # TAB 11 — SYNTHÈSE MULTI-MODULE (v3.2)
 # ══════════════════════════════════════════════
 with tab11:
@@ -1581,12 +2085,14 @@ with tab12:
     c_ft1.info('**Flow Through** (CA augmente)\nFT = delta GOP / delta CA\nCible : 50% | Rate-driven : FT eleve | Volume-driven : FT faible')
     c_ft2.info('**Expense Flex** (CA baisse)\nFlex = 1 - FT\nMesure la capacite a reduire les couts quand le CA recule.')
 
+
+# ════════════════════════════════════════════════════════════════════════════
 # ─────────────────────────────────────────────
 #  Footer
 # ─────────────────────────────────────────────
 st.markdown("---")
 st.caption(
-    f"DEA-H v3.4 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
+    f"DEA-H v3.8 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
     "Modèles : BCC/CCR · TOPSIS · K-means · Metafrontière · Multi-Module DEA (7 dimensions) · "
-    "Méthodologie : Charnes et al. (1978), Banker et al. (1984), Min et al. (2009), Assaf et al. (2009), Poldrugovac et al. (2016)"
+    "Méthodologie : Charnes et al. (1978), Banker et al. (1984), Min et al. (2009), Assaf et al. (2009), Poldrugovac et al. (2016), Färe et al. (1994), Tobin (1958)"
 )
