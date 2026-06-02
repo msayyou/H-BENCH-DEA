@@ -1,5 +1,5 @@
 """
-app.py — DEA-H v3.8
+app.py — DEA-H v3.9
 Application Streamlit : Analyse DEA BCC/CCR pour Asset Management Hôtelier
 11 onglets : Board | KPIs | TOPSIS | K-means | Quadrants | Slacks | Fiche Actif
            | Metafrontière | Capital & Flow Through | Benchmark Marché
@@ -21,7 +21,8 @@ from modules_config import MODULES, check_module_feasibility
 from dea_model import run_multi_module
 from synthesis_tab import render_synthesis_tab, render_module_selector
 from pdf_fiche_actif import generate_fiche_actif_pdf
-from malmquist_tobit import compute_malmquist, compute_tobit, has_n1_cols
+from malmquist_tobit import (compute_malmquist, compute_tobit, has_n1_cols,
+                              compute_mdea_room_fb, mann_whitney_groups)
 
 warnings.filterwarnings('ignore')
 
@@ -87,6 +88,10 @@ if "malmquist_results" not in st.session_state:
     st.session_state["malmquist_results"] = None
 if "tobit_results" not in st.session_state:
     st.session_state["tobit_results"] = None
+if "mdea_rf_results" not in st.session_state:
+    st.session_state["mdea_rf_results"] = None
+if "mw_group_results" not in st.session_state:
+    st.session_state["mw_group_results"] = None
 if "module_results" not in st.session_state:
     st.session_state["module_results"] = {}
 if "active_modules_mm" not in st.session_state:
@@ -396,7 +401,7 @@ with tab1:
         st.warning(
             f"⚠️ **Ratio DMUs/variables insuffisant** : {dea._dmu_ratio_info} — "
             "Scores DEA potentiellement sur-efficients. Augmentez le compset ou réduisez les variables. "
-            "Réf. : Poldrugovac et al. (2016), Färe et al. (1994), Tobin (1958) ; Raab & Lichty (2002)."
+            "Réf. : Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) ; Raab & Lichty (2002)."
         )
     st.markdown('<p class="section-title">📋 Rapport Stratégique — Comité d\'Investissement</p>', unsafe_allow_html=True)
     st.dataframe(board, use_container_width=True, hide_index=True)
@@ -406,7 +411,7 @@ with tab1:
 
     # ── Détection outliers Mahalanobis (Poldrugovac et al. 2016) ─────────────────────
     st.markdown('<p class="section-title">Détection Outliers — Distance de Mahalanobis</p>', unsafe_allow_html=True)
-    st.caption("Poldrugovac et al. (2016), Färe et al. (1994), Tobin (1958) ; Kerstens (1996) — D² suit une loi χ² à k degrés de liberté. Outlier si p < 0.01. Exclure les outliers avant interprétation des scores DEA.")
+    st.caption("Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) ; Kerstens (1996) — D² suit une loi χ² à k degrés de liberté. Outlier si p < 0.01. Exclure les outliers avant interprétation des scores DEA.")
 
     _mah_df = dea.detect_outliers_mahalanobis(threshold_p=0.01)
     _n_outliers = _mah_df['Outlier'].sum()
@@ -1085,16 +1090,28 @@ with tab8:
     # ── ANOVA second stage (Poldrugovac 2016 ; Assaf 2009) ────────────────────────
     st.markdown("---")
     st.markdown('<p class="section-title">ANOVA Second Stage -- Differences efficience entre groupes</p>', unsafe_allow_html=True)
-    st.caption('Poldrugovac et al. (2016), Färe et al. (1994), Tobin (1958) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
+    st.caption('Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
 
     try:
-        _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
-        col_a1, col_a2 = st.columns([2, 1])
-        with col_a1:
-            st.markdown("**Efficience BCC par groupe**")
+        # Mann-Whitney (Yu 2012) + ANOVA classique
+        _mw_res = mann_whitney_groups(dea, groups)
+        if 'error' not in _mw_res:
+            col_a1, col_a2 = st.columns([3, 1])
+            with col_a1:
+                st.markdown('**Mann-Whitney U par groupe (Yu 2012, Table 4-5)**')
+                st.dataframe(_mw_res['summary'], use_container_width=True, hide_index=True)
+                st.dataframe(_mw_res['pairs'][['Groupe A','Groupe B','Moy. BCC A','Moy. BCC B','p-value','Sig.*','Verdict']],
+                             use_container_width=True, hide_index=True)
+            with col_a2:
+                st.metric('Groupes testés', _mw_res['n_groupes'])
+                st.metric('Alpha Bonferroni', f"{_mw_res['alpha_bonf']:.4f}")
+                st.caption(_mw_res['test'])
+            st.info('*** p<0.01  ** p<0.05  * p<0.10  ns = non significatif. '
+                    'Test non-paramétrique recommandé pour scores DEA censurés en 1.0 '
+                    '(Simar & Wilson 2007 ; Yu 2012).')
+        else:
+            _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
             st.dataframe(_anova_summ, use_container_width=True, hide_index=True)
-        with col_a2:
-            st.markdown("**Résultat ANOVA**")
             st.dataframe(_anova_res, use_container_width=True, hide_index=True)
     except Exception as _e:
         st.info(f"ANOVA non disponible : {_e}")
@@ -1399,7 +1416,105 @@ with tab9:
             else:
                 st.info("Données capital insuffisantes pour le calcul DEA Capital (surface + CAPEX + revenus requis).")
     
-        # Expense Flex (Russo & Legel p.33)
+    
+    # ── MDEA Room / F&B Decomposition (Yu 2012) ─────────────────────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">🏨 Décomposition Room / F&B — MDEA (Yu 2012)</p>', unsafe_allow_html=True)
+    st.caption(
+        "Yu, M.-M. (2012) Current Issues in Tourism 15(5), 461-476. "
+        "Décompose l'efficience globale en efficience Hébergement et efficience F&B. "
+        "Localise la source d'inefficience par département. "
+        "Nécessite : rooms_cost + rooms_revenue + fb_cost + fb_revenue dans le CSV."
+    )
+
+    if st.button("Calculer décomposition Room / F&B", key="mdea_rf_btn"):
+        with st.spinner("Calcul MDEA Room/F&B..."):
+            try:
+                _rf = compute_mdea_room_fb(dea)
+                st.session_state["mdea_rf_results"] = _rf
+            except Exception as _e:
+                st.error(f"Erreur MDEA : {_e}")
+
+    _rf = st.session_state.get("mdea_rf_results")
+    if _rf is not None:
+        if not _rf["feasible"]:
+            st.warning(
+                f"Colonnes manquantes pour MDEA Room/F&B : "
+                f"{', '.join(_rf['missing_cols'])}. "
+                "Ajoutez rooms_cost, rooms_revenue, fb_cost, fb_revenue au CSV."
+            )
+        else:
+            if _rf["shared_used"]:
+                st.success(f"Inputs partagés détectés : {', '.join(_rf['shared_used'])}")
+
+            # Tableau scores
+            st.dataframe(
+                _rf["scores"][["Hôtel","BCC Global","BCC Room","BCC F&B","Δ (F&B - Room)","Source inefficience"]],
+                use_container_width=True, hide_index=True
+            )
+
+            # Summary stats
+            col_rf1, col_rf2 = st.columns(2)
+            with col_rf1:
+                st.markdown("**Statistiques par division**")
+                st.dataframe(_rf["summary"], use_container_width=True, hide_index=True)
+            with col_rf2:
+                if _rf["mw_test"]:
+                    st.markdown("**Mann-Whitney Room vs F&B**")
+                    st.info(_rf["mw_test"]["conclusion"])
+                    st.caption(_rf["mw_test"]["note"])
+
+            # Scatter BCC Room vs BCC F&B
+            _sc = _rf["scores"].copy()
+            _sc["_r"] = pd.to_numeric(_sc["BCC Room"], errors="coerce")
+            _sc["_f"] = pd.to_numeric(_sc["BCC F&B"], errors="coerce")
+            _sc = _sc.dropna(subset=["_r","_f"])
+
+            fig_rf = go.Figure()
+            for _, row_rf in _sc.iterrows():
+                _col_rf = ("#27ae60" if "Équilibré" in row_rf["Source inefficience"]
+                           else "#e74c3c" if "Double" in row_rf["Source inefficience"]
+                           else "#f39c12")
+                fig_rf.add_trace(go.Scatter(
+                    x=[row_rf["_r"]], y=[row_rf["_f"]],
+                    mode="markers+text", text=[row_rf["Hôtel"]],
+                    textposition="top center", textfont=dict(size=8),
+                    marker=dict(size=11, color=_col_rf), showlegend=False,
+                    hovertemplate=f"<b>{row_rf['Hôtel']}</b><br>Room: {row_rf['_r']:.3f}<br>F&B: {row_rf['_f']:.3f}<extra></extra>",
+                ))
+            # Diagonale
+            fig_rf.add_shape(type="line", x0=0.5, y0=0.5, x1=1.0, y1=1.0,
+                             line=dict(dash="dot", color="gray"))
+            fig_rf.add_annotation(x=0.97, y=0.97, text="Room = F&B",
+                                   showarrow=False, font=dict(size=9, color="gray"))
+            fig_rf.add_annotation(x=0.65, y=0.95, text="F&B > Room",
+                                   showarrow=False, font=dict(size=9, color="#27ae60"))
+            fig_rf.add_annotation(x=0.95, y=0.65, text="Room > F&B",
+                                   showarrow=False, font=dict(size=9, color="#f39c12"))
+            fig_rf.update_layout(
+                title="BCC Room vs BCC F&B — Localisation de l'inefficience (Yu 2012)",
+                xaxis=dict(title="BCC Hébergement (Room)", range=[0.5,1.05]),
+                yaxis=dict(title="BCC Restauration (F&B)", range=[0.5,1.05]),
+                height=420, paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_rf, use_container_width=True)
+
+            st.info(
+                "Au-dessus de la diagonale : F&B plus efficient que Hébergement. "
+                "En dessous : Hébergement plus efficient. "
+                "Sur la diagonale : performance équilibrée entre les deux divisions. "
+                "Source : Yu (2012) — l'efficience globale = moyenne pondérée Room + F&B."
+            )
+
+            # Export CSV
+            _csv_rf = _rf["scores"].to_csv(index=False, sep=";", decimal=",")
+            st.download_button(
+                "⬇️ Exporter décomposition Room/F&B (CSV)",
+                data=_csv_rf.encode("utf-8-sig"),
+                file_name="deah_mdea_room_fb.csv", mime="text/csv",
+            )
+
+    # Expense Flex (Russo & Legel p.33)
         st.markdown('<p class="section-title">Expense Flex & Flow Through</p>', unsafe_allow_html=True)
         st.caption('Flow Through = delta_GOP / delta_CA | Expense Flex = 1 - FT quand CA baisse | Cible standard 50%')
     
@@ -2092,7 +2207,7 @@ with tab12:
 # ─────────────────────────────────────────────
 st.markdown("---")
 st.caption(
-    f"DEA-H v3.8 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
+    f"DEA-H v3.9 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
     "Modèles : BCC/CCR · TOPSIS · K-means · Metafrontière · Multi-Module DEA (7 dimensions) · "
-    "Méthodologie : Charnes et al. (1978), Banker et al. (1984), Min et al. (2009), Assaf et al. (2009), Poldrugovac et al. (2016), Färe et al. (1994), Tobin (1958)"
+    "Méthodologie : Charnes et al. (1978), Banker et al. (1984), Min et al. (2009), Assaf et al. (2009), Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958)"
 )
