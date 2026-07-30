@@ -1171,6 +1171,8 @@ with tab1:
     st.dataframe(_mah_df, use_container_width=True, hide_index=True)
     st.caption("D² = distance de Mahalanobis au centre du nuage de points | p-value = probabilité sous H0 : 'ce DMU appartient à la distribution' | Seuil : p < 0.01")
 
+    st.caption("📚 *Réf. : Charnes, Cooper & Rhodes (1978) CCR · Banker, Charnes & Cooper (1984) BCC · Poldrugovac, Tekavcic & Jankovic (2016) outliers Mahalanobis · Efficience ∈ ]0,1] — 1.0 = sur la frontière d'efficience du compset.*")
+
 
 # ══════════════════════════════════════════════
 # TAB 2 — DASHBOARD KPIs
@@ -1224,6 +1226,8 @@ with tab2:
         height=420, paper_bgcolor='rgba(0,0,0,0)',
     )
     st.plotly_chart(fig_scatter, use_container_width=True)
+
+    st.caption("📚 *Réf. : Charnes, Cooper & Rhodes (1978) CCR · Banker, Charnes & Cooper (1984) BCC · Histogramme resserré 0.80-0.90 = compset homogène · Outlier < 0.50 = restructuration prioritaire · Points au-dessus de la diagonale BCC vs CCR = problème d'échelle.*")
 
 # ══════════════════════════════════════════════
 # TAB 3 — CLASSEMENT TOPSIS
@@ -1422,6 +1426,8 @@ with tab3:
         st.download_button("⬇️ Exporter tableau consolidé (CSV)", data=_csv_consol.encode("utf-8-sig"),
                            file_name="deah_ranking_consolide.csv", mime="text/csv")
 
+    st.caption("📚 *Réf. : Hwang & Yoon (1981) TOPSIS · Vlad, Toma & Fîntîneru (2026) — pondération hybride entropie de Shannon (α=0.6, Sustainability 18(3)) · Score Pi ∈ [0,1] — 1 = solution idéale · Poids BCC 35% · Scale 25% · RevPAR 25% · TO 15%.*")
+
 
 # ══════════════════════════════════════════════
 # TAB 4 — SEGMENTATION K-MEANS
@@ -1489,6 +1495,8 @@ with tab4:
     )
     st.plotly_chart(fig_box, use_container_width=True)
 
+    st.caption("📚 *Réf. : MacQueen (1967) K-means clustering · Kaufman & Rousseeuw (1990) partitionnement · Silhouette score valide la cohérence des clusters · Features : BCC + Scale Efficiency + TOPSIS + RevPAR normalisé.*")
+
 # ══════════════════════════════════════════════
 # TAB 5 — QUADRANTS & ÉCHELLE
 # ══════════════════════════════════════════════
@@ -1543,6 +1551,8 @@ with tab5:
                             yaxis=dict(tickformat='.0%', range=[0, 1.1]),
                             height=380, paper_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig_scale, use_container_width=True)
+
+    st.caption("📚 *Réf. : Banker, Charnes & Cooper (1984) BCC — rendements variables d'échelle · Scale Efficiency = CCR/BCC · <0.85 = problème de taille · Q1 conserver · Q2 croissance · Q3 opérationnel · Q4 intervention urgente.*")
 
 # ══════════════════════════════════════════════
 # TAB 6 — SLACKS & GASPILLAGES
@@ -1652,6 +1662,8 @@ with tab6:
             c1p.info('**PAR** charges fixes, A&G, Maintenance, Utilities')
             c2p.info('**POR** Rooms dept, F&B, couts variables')
             c3p.info('**% CA** Management fees, Marketing, Franchise')
+
+    st.caption("📚 *Réf. : Charnes et al. (1978) modèle additive · Barros (2005) format Radial+Slack+Projected · Min, Min & Joo (2009) décomposition PAR (Per Available Room) / POR (Per Occupied Room) / % CA selon USALI.*")
 
 # ══════════════════════════════════════════════
 # TAB 7 — FICHE ACTIF DRILL-DOWN
@@ -1763,6 +1775,8 @@ with tab7:
                     st.error('ReportLab non disponible — ajouter reportlab dans requirements.txt')
             except Exception as _pdf_e:
                 st.error(f'Erreur PDF : {_pdf_e}')
+
+    st.caption("📚 *Réf. : Barros (2005) Tableau 4 — Valeur Actuelle · Mvt. Radial · Slack · Valeur Projetée · Andersen & Petersen (1993) super-efficience (>1.0 = vrai leader) · Barros & Dieke (2008) peers de référence et frontière de best practice.*")
 
 # ══════════════════════════════════════════════
 # TAB 8 — METAFRONTIÈRE
@@ -1918,6 +1932,8 @@ with tab8:
         height=400, paper_bgcolor='rgba(0,0,0,0)',
     )
     st.plotly_chart(fig_ms, use_container_width=True)
+
+    st.caption("📚 *Réf. : Assaf, Barros & Josiassen (2010) metafrontière bootstrappée · Simar & Wilson (2007) bootstrap IC95% DEA · Yu (2012) Mann-Whitney non-paramétrique (scores DEA censurés en 1.0, correction Bonferroni) · Tobin (1958) régression censurée second stage DEA.*")
 
 
 
@@ -2322,6 +2338,8 @@ with tab9:
     
         st.dataframe(pd.DataFrame(flex_rows), use_container_width=True, hide_index=True)
         st.info('FT > 50% = bonne conversion revenus -> profit. FT < 50% = charges variables elevees. Expense Flex calcule quand CA baisse.')
+
+    st.caption("📚 *Réf. : Min, Min & Joo (2009) DEA financière USALI (CAPEX/chambre, GOPPAM €/m²) · Yu (2012) MDEA Room/F&B — décomposition départementale BCC Hébergement + BCC Restauration · Barros (2005) DEA Capital vs DEA Opérationnel · GOPPAM < 0.30 €/m² = signal renégociation de bail.*")
 
 # ══════════════════════════════════════════════
 # TAB 10 — BENCHMARK MARCHÉ
@@ -2783,6 +2801,8 @@ with tab10:
         elif st.session_state.get("tobit_results") and "error" in st.session_state["tobit_results"]:
             st.error(st.session_state["tobit_results"]["error"])
 
+    st.caption("📚 *Réf. : Vlad, Toma & Fîntîneru (2026) TOPSIS composite entropie de Shannon · Caves, Christensen & Diewert (1982) Malmquist TFP · Färe et al. (1994) décomposition Catch-up × Frontier Shift · Tobin (1958) second stage — déterminants structurels d'efficience.*")
+
 
 # TAB 11 — SYNTHÈSE MULTI-MODULE (v3.2)
 # ══════════════════════════════════════════════
@@ -2839,6 +2859,8 @@ sont automatiquement mappées vers les noms standard des modules.*
 """)
     else:
         render_synthesis_tab(_module_results, dmu_col="hotel_name")
+
+    st.caption("📚 *Réf. : Charnes, Cooper & Rhodes (1978) CCR · Banker et al. (1984) BCC · Shirouyehzad et al. (2012) DEA qualité de service SERVQUAL · 7 modules simultanés : Opérationnel / Financier USALI / Capital / RH / RevMgt / ESG / Qualité.*")
 
 
 # ══════════════════════════════════════════════
@@ -2953,6 +2975,8 @@ with tab12:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+    st.caption("📚 *Réf. : USALI (Uniform System of Accounts for the Lodging Industry, 11ème éd.) · Russo & Legel — format PAR (Per Available Room) / POR (Per Occupied Room) / % CA · Flow Through = ΔGOP / ΔRevenu · Expense Flex = 1 − Flow Through.*")
+
 # ─────────────────────────────────────────────
 #  Footer
 # ─────────────────────────────────────────────
