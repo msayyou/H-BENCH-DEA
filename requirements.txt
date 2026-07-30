@@ -7,3 +7,4 @@ PuLP>=2.7.0
 scipy>=1.11.0
 openpyxl>=3.1.0
 reportlab>=4.0.0
+kaleido>=0.2.1
