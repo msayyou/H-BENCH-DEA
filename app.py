@@ -1,10 +1,5 @@
-"""
-app.py — DEA-H v3.9
-Application Streamlit : Analyse DEA BCC/CCR pour Asset Management Hôtelier
-11 onglets : Board | KPIs | TOPSIS | K-means | Quadrants | Slacks | Fiche Actif
-           | Metafrontière | Capital & Flow Through | Benchmark Marché
-           | 🔀 Synthèse Multi-Module  ← NOUVEAU v3.2
-"""
+# app.py — DEA-H v3.9
+# REIV Hospitality · Asset Management Hôtelier
 
 import streamlit as st
 import pandas as pd
@@ -367,13 +362,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10) -
 
 
 # --- malmquist_tobit inline ---
-"""
-malmquist_tobit.py — Modules Malmquist & Tobit pour DEA-H v3.7
-REIV Hospitality
-
-Malmquist : Caves, Christensen & Diewert (1982) ; Färe et al. (1994)
-Tobit     : Tobin (1958) ; Simar & Wilson (2007) second stage DEA
-"""
+# Malmquist : Caves et al. (1982) ; Färe et al. (1994)
+# Tobit : Tobin (1958) ; Simar & Wilson (2007)
 import numpy as np
 import pandas as pd
 import pulp
@@ -912,13 +902,37 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
+/* ── Police & Base ─────────────────────────────── */
+html, body, [class*="css"] { font-family: 'Inter', 'Segoe UI', sans-serif; }
+
+/* ── Header principal ──────────────────────────── */
 .main-header {
-    font-size: 2.2rem; font-weight: 800;
-    color: #1a3a5c; text-align: center; margin-bottom: 0.5rem;
+    font-size: 2.4rem; font-weight: 900; letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #1a3a5c 0%, #2e6da4 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    text-align: center; margin-bottom: 0.3rem; line-height: 1.1;
 }
 .sub-header {
-    text-align: center; color: #555; font-size: 0.95rem; margin-bottom: 1.5rem;
+    text-align: center; color: #6b7280; font-size: 0.95rem;
+    margin-bottom: 0.3rem; letter-spacing: 0.3px;
 }
+.reiv-badge {
+    text-align: center; margin-bottom: 1.5rem;
+}
+.reiv-badge span {
+    background: #1a3a5c; color: white; font-size: 0.72rem;
+    font-weight: 600; padding: 3px 10px; border-radius: 20px;
+    letter-spacing: 0.5px; text-transform: uppercase;
+}
+
+/* ── Section titles ────────────────────────────── */
+.section-title {
+    font-size: 1.15rem; font-weight: 700; color: #1a3a5c;
+    border-left: 4px solid #2e6da4; padding-left: 0.7rem;
+    margin: 1.4rem 0 0.8rem 0;
+}
+
+/* ── KPI boxes ─────────────────────────────────── */
 .kpi-box {
     background: linear-gradient(135deg, #1a3a5c, #2e6da4);
     padding: 1rem 1.2rem; border-radius: 0.8rem;
@@ -934,19 +948,83 @@ st.markdown("""
     padding: 1rem 1.2rem; border-radius: 0.8rem;
     color: white; text-align: center;
 }
-.section-title {
-    font-size: 1.3rem; font-weight: 700;
-    color: #1a3a5c; border-left: 4px solid #2e6da4;
-    padding-left: 0.7rem; margin: 1.2rem 0 0.8rem 0;
+
+/* ── Metric cards (native Streamlit) ───────────── */
+[data-testid="metric-container"] {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 0.8rem 1rem;
+    box-shadow: 0 1px 4px rgba(26,58,92,0.06);
 }
+[data-testid="metric-container"] label {
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
+    color: #64748b !important;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+[data-testid="stMetricValue"] {
+    font-size: 1.55rem !important;
+    font-weight: 800 !important;
+    color: #1a3a5c !important;
+}
+
+/* ── Sidebar ────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1a3a5c 0%, #0f2238 100%);
+}
+[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+[data-testid="stSidebar"] .stSelectbox label,
+[data-testid="stSidebar"] .stSlider label,
+[data-testid="stSidebar"] .stNumberInput label,
+[data-testid="stSidebar"] .stRadio label { color: #cbd5e1 !important; font-size: 0.82rem !important; }
+[data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+    color: #93c5fd !important; font-size: 0.9rem !important;
+    text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700;
+}
+[data-testid="stSidebar"] hr { border-color: #2e6da4 !important; }
+
+/* ── Tabs ───────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px; background: #f1f5f9;
+    padding: 4px; border-radius: 10px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 7px; padding: 6px 14px;
+    font-size: 0.82rem; font-weight: 600; color: #64748b;
+}
+.stTabs [aria-selected="true"] {
+    background: white !important; color: #1a3a5c !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+}
+
+/* ── Dataframes ─────────────────────────────────── */
+[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
+
+/* ── Buttons ────────────────────────────────────── */
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #1a3a5c, #2e6da4) !important;
+    border: none !important; border-radius: 8px !important;
+    font-weight: 700 !important; letter-spacing: 0.3px;
+    box-shadow: 0 2px 8px rgba(26,58,92,0.25) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(26,58,92,0.35) !important;
+}
+
+/* ── Divider ────────────────────────────────────── */
+hr { border-color: #e2e8f0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  Titre
 # ─────────────────────────────────────────────
-st.markdown('<h1 class="main-header">📊 DEA-H — Asset Manager Benchmarking</h1>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Analyse d\'efficacité BCC/CCR · TOPSIS · K-means · Portefeuille hôtelier</p>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">DEA-H — Asset Manager Benchmarking</h1>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Analyse BCC/CCR &middot; TOPSIS &middot; K-means &middot; Metafrontière &middot; Multi-Module DEA</p>', unsafe_allow_html=True)
+st.markdown('<div class="reiv-badge"><span>REIV Hospitality · v3.9</span></div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  Session state init (multi-module)
@@ -979,12 +1057,27 @@ with st.sidebar:
     st.header("⚙️ Configuration")
 
     st.subheader("💼 Paramètres économiques")
-    avg_salary   = st.number_input("Coût FTE (€/an)",           value=35_000, step=5_000, format="%i")
-    revpar_value = st.number_input("Valeur 1 pt RevPAR (€/an)", value=1_000,  step=100,   format="%i")
+    avg_salary   = st.number_input("Coût ETP moyen (€/an)", help="Salaire chargé moyen par ETP. Appliquer la même valeur pour tous les actifs du compset.",           value=35_000, step=5_000, format="%i")
+    revpar_value = st.number_input("Multiplicateur RevPAR (1 = €)", help="Laisser à 1 si RevPAR est en € réels dans le CSV. Ajuster uniquement si RevPAR est un indice.", value=1_000,  step=100,   format="%i")
     jours_exploit = st.number_input(
         "Jours d'exploitation / an",
         value=365, min_value=30, max_value=365, step=1, format="%i",
         help="Resort saisonnier : 180-240 | Urban : 340-365. Corrige PAR, GOPPAM, TREVPAR."
+    )
+
+    ft_pct = st.slider(
+        "Flow Through % (GOP/ΔRevenu)",
+        min_value=0.20, max_value=0.80, value=0.45, step=0.01,
+        format="%.0f%%",
+        help="Part du revenu marginal convertie en GOP. Benchmark Europe : hôtellerie urbaine ~45%. "
+             "Appliquer la même valeur pour tous les actifs du compset."
+    )
+
+    st.markdown("---")
+    st.info(
+        "⚠️ **Compset homogène requis** — ne pas mélanger des catégories ou des marchés différents. "
+        "DEA mesure l'efficience relative : un 3★ et un 5★ ne partagent pas la même technologie de production.",
+        icon=None
     )
 
     st.markdown("---")
@@ -1322,18 +1415,15 @@ with tab1:
     _kc5.metric("🥇 Leader TOPSIS",   (_best_tp[:18] if len(_best_tp) > 18 else _best_tp))
 
     # ── Upside financier total ───────────────────────────────────────────────
-    _FT_B = {1:0.30, 2:0.35, 3:0.45, 4:0.55, 5:0.65}
     _up_fte = _up_rev = _up_gop = 0.0
     for _h in dea.hotels:
         _lits  = float(dea.df.loc[_h, 'nb_lits'])
         _occ   = float(dea.df.loc[_h, 'taux_occupation']) / 100
         _se    = dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', 0)
         _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
-        _stars = int(dea.df.loc[_h, 'classement_etoiles']) if 'classement_etoiles' in dea.df.columns else 4
-        _ft    = _FT_B.get(_stars, 0.45)
         _up_fte += _se * avg_salary / 1000
         _up_rev += _sr * _lits * jours_exploit * _occ * revpar_value / 1_000_000
-        _up_gop += _sr * _lits * jours_exploit * _occ * revpar_value * _ft / 1_000_000
+        _up_gop += _sr * _lits * jours_exploit * _occ * revpar_value * ft_pct / 1_000_000
     st.markdown("---")
     _uc1, _uc2, _uc3 = st.columns(3)
     _uc1.metric("💼 Upside ETP total",      f"{_up_fte:,.0f} k€/an",  help="Réduction masse salariale si alignement sur frontière DEA")
@@ -1812,10 +1902,17 @@ with tab5:
         st.info("""
 **Lecture des quadrants**
 - **Q1 🏆 Efficient** : BCC ≥ seuil ET Scale ≥ seuil → Conserver, benchmark
-- **Q2 ⚙️ Échelle** : BCC ≥ seuil MAIS Scale < seuil → Problème de taille
-- **Q3 🧠 Gestion** : BCC < seuil MAIS Scale ≥ seuil → Problème de gestion pure
+- **Q2 ⚙️ Échelle** : BCC ≥ seuil MAIS Scale < seuil → Problème de taille structurel → lire le **TGR (Tab 8)**
+- **Q3 🧠 Gestion** : BCC < seuil MAIS Scale ≥ seuil → Problème de gestion pure → plan opérationnel
 - **Q4 🔴 Double** : BCC < seuil ET Scale < seuil → Intervention prioritaire
         """)
+        st.caption(
+            "ℹ️ Q2 : le problème d\'échelle est structurel. "
+            "Ne pas relancer en Output-Oriented — cela reformule la question sans changer le diagnostic. "
+            "L\'outil correct est le **TGR (Metafrontière, Onglet 8)** qui mesure l\'écart "
+            "entre la technologie du groupe et la meilleure technologie disponible. "
+            "Réf. : Assaf, Barros & Josiassen (2010)."
+        )
     with col2:
         q_df = dea.get_quadrant_summary()
         st.dataframe(q_df[['Quadrant','N hôtels','BCC moyen','Eff. Éch.']], use_container_width=True, hide_index=True)
@@ -2288,12 +2385,24 @@ with tab8:
 - **MTE** — efficience relative à la meilleure technologie toutes catégories
 - **TGR** (MTE/GTE) — écart entre technologie du groupe et meilleure technologie possible
     """)
+    st.caption(
+        "**Recommandation méthodologique :** si votre portefeuille mélange des catégories "
+        "(urban/resort, 3★/5★), utilisez la segmentation ci-dessous pour corriger le biais "
+        "inter-groupes (Assaf et al. 2010). Si votre compset est homogène, tous les hôtels "
+        "appartiennent au même groupe — GTE = MTE pour tous, sans impact sur les scores."
+    )
     seg_options = {'🏠 Taille (auto depuis nb_lits)': 'taille'}
     if 'type_gestion' in dea.df.columns:
-        seg_options['⚙️ Type de gestion'] = 'type_gestion'
+        seg_options['⚙️ Type de gestion (indépendant/chaîne)'] = 'type_gestion'
     if 'classement_etoiles' in dea.df.columns:
-        seg_options['⭐ Classement étoiles'] = 'classement_etoiles'
-    seg_label = st.selectbox("Dimension de segmentation", options=list(seg_options.keys()))
+        seg_options['⭐ Classement étoiles (1★ → 5★)'] = 'classement_etoiles'
+
+    seg_label = st.selectbox(
+        "Dimension de segmentation",
+        options=list(seg_options.keys()),
+        help="Choisir la dimension qui définit les groupes homogènes dans votre compset. "
+             "Réf. : Assaf, Barros & Josiassen (2010) — metafrontière bootstrappée."
+    )
     seg_key = seg_options[seg_label]
     groups = dea.get_auto_size_groups() if seg_key == 'taille' else dea.df[seg_key].rename('groupe')
     with st.spinner("Calcul GTE / MTE / TGR…"):
@@ -2350,6 +2459,13 @@ with tab8:
     with col2:
         st.info("**🧠 GTE faible + TGR élevé** — Potentiel là, gestion insuffisante → plan opérationnel.")
         st.error("**🔴 GTE faible + TGR faible** — Double gap. Cession ou restructuration.")
+
+    st.info(
+        "💡 **Peers restreints au segment pertinent via GTE** — la frontière intra-groupe "
+        "garantit que chaque hôtel est évalué contre ses vrais comparables (même segment). "
+        "Restreindre manuellement les peers est redondant avec cette mécanique. "
+        "Réf. : Assaf, Barros & Josiassen (2010) Table 3.",
+    )
 
     # ── ANOVA second stage (Poldrugovac 2016 ; Assaf 2009) ────────────────────────
     st.markdown("---")
@@ -2439,8 +2555,8 @@ with tab8:
 # ══════════════════════════════════════════════
 with tab9:
     st.markdown('<p class="section-title">💰 Efficience Capital & Flow Through</p>', unsafe_allow_html=True)
-    FT_BENCH = {1: 0.30, 2: 0.35, 3: 0.45, 4: 0.55, 5: 0.65}
-    FT_DEFAULT = 0.45
+    # Flow Through global — défini dans la sidebar (pas de différenciation par étoiles)
+    # FT% global depuis sidebar
 
     init_data = {}
     for hotel in dea.hotels:
@@ -2501,7 +2617,7 @@ with tab9:
             capex_ch = round(capex_ke * 1000 / lits, 0)  if lits > 0    else None
             rev_est  = revpar * to * jours_exploit * lits
             rendement= round(rev_est / (capex_ke * 1000), 2) if capex_ke > 0 else None
-            ft       = FT_BENCH.get(stars, FT_DEFAULT)
+            ft       = ft_pct
             slack_r  = dea.slacks.get(hotel, {}).get('outputs', {}).get('revpar', 0)
             up_gop   = round(slack_r * lits * jours_exploit * ft / 1_000_000, 3) if slack_r > 0 else 0
             gop_margin = round(gop_ke * 1000 / rev_est * 100, 1) if gop_ke > 0 and rev_est > 0 else None
@@ -2571,8 +2687,8 @@ with tab9:
         st.markdown("---")
         upside_rows = []
         for r in cap_rows:
-            hotel  = r['Hôtel']; stars  = int(cap_input.loc[hotel,'classement (★)'])
-            ft     = FT_BENCH.get(stars, FT_DEFAULT)
+            hotel  = r['Hôtel']
+            ft     = ft_pct
             slk_r  = dea.slacks.get(hotel,{}).get('outputs',{}).get('revpar', 0)
             lits   = float(dea.df.loc[hotel, 'nb_lits'])
             up_rev = round(slk_r * lits * 365 / 1_000_000, 3)
@@ -2791,8 +2907,7 @@ with tab9:
         flex_rows = []
         for r in cap_rows:
             hotel_ft = r['Hôtel']
-            stars_ft = int(cap_input.loc[hotel_ft, 'classement (★)'])
-            ft_bench_ft = FT_BENCH.get(stars_ft, FT_DEFAULT)
+            ft_bench_ft = ft_pct
             lits_ft  = float(dea.df.loc[hotel_ft, 'nb_lits'])
             revpar_ft = float(dea.df.loc[hotel_ft, 'revpar'])
             ca_ft    = revpar_ft * lits_ft * 365
