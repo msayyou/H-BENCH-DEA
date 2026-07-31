@@ -1065,19 +1065,19 @@ with st.sidebar:
         help="Resort saisonnier : 180-240 | Urban : 340-365. Corrige PAR, GOPPAM, TREVPAR."
     )
 
-    ft_pct = st.slider(
+    _ft_int = st.slider(
         "Flow Through % (GOP/ΔRevenu)",
-        min_value=0.20, max_value=0.80, value=0.45, step=0.01,
-        format="%.0f%%",
+        min_value=20, max_value=80, value=45, step=1,
+        format="%d%%",
         help="Part du revenu marginal convertie en GOP. Benchmark Europe : hôtellerie urbaine ~45%. "
              "Appliquer la même valeur pour tous les actifs du compset."
     )
+    ft_pct = _ft_int / 100  # Conversion en décimal pour les calculs
 
     st.markdown("---")
-    st.info(
-        "⚠️ **Compset homogène requis** — ne pas mélanger des catégories ou des marchés différents. "
-        "DEA mesure l'efficience relative : un 3★ et un 5★ ne partagent pas la même technologie de production.",
-        icon=None
+    st.caption(
+        "💡 Si votre compset mélange des catégories (3★/5★, urban/resort), utilisez l'onglet "
+        "**🌐 Metafrontière** pour corriger le biais inter-segments via GTE/TGR (Assaf et al. 2010)."
     )
 
     st.markdown("---")
