@@ -23,8 +23,35 @@ from synthesis_tab import render_synthesis_tab, render_module_selector
 # --- pdf_fiche_actif inline ---
 from io import BytesIO
 from datetime import datetime
-
 import numpy as np
+
+# ── ReportLab & Kaleido — imports globaux ────────────────────────────────────
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                    Table, TableStyle, HRFlowable, Image, PageBreak)
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+
+try:
+    import kaleido  # noqa: F401
+    KALEIDO_AVAILABLE = True
+except ImportError:
+    KALEIDO_AVAILABLE = False
+
+
+def plotly_to_png_bytes(fig, width=700, height=400, scale=2):
+    if not KALEIDO_AVAILABLE:
+        return None
+    try:
+        return fig.to_image(format="png", width=width, height=height, scale=scale)
+    except Exception:
+        return None
 
 
 def generate_fiche_actif_pdf(
@@ -240,6 +267,104 @@ def generate_fiche_actif_pdf(
 
     doc.build(story)
     return buf.getvalue()
+
+
+def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10) -> bytes:
+    """Rapport PDF portfolio : couverture + KPIs + distribution BCC + Top TOPSIS + Critiques."""
+    if not REPORTLAB_AVAILABLE:
+        return b""
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=1.8*cm, rightMargin=1.8*cm,
+                            topMargin=1.5*cm, bottomMargin=1.5*cm)
+    NAVY  = colors.HexColor("#1a3a5c"); BLUE  = colors.HexColor("#2e6da4")
+    RED   = colors.HexColor("#e74c3c"); LGRAY = colors.HexColor("#f5f5f5")
+    WHITE = colors.white
+    styles = getSampleStyleSheet()
+    def S(name, **kw): return ParagraphStyle(name, parent=styles["Normal"], **kw)
+    cover_title = S("CT", fontSize=22, textColor=NAVY, fontName="Helvetica-Bold", alignment=TA_CENTER, spaceAfter=16)
+    cover_sub   = S("CS", fontSize=13, textColor=BLUE,  fontName="Helvetica",      alignment=TA_CENTER, spaceAfter=8)
+    h1_s  = S("H1", fontSize=13, textColor=NAVY, fontName="Helvetica-Bold", spaceBefore=12, spaceAfter=6)
+    h2_s  = S("H2", fontSize=10, textColor=NAVY, fontName="Helvetica-Bold", spaceBefore=8,  spaceAfter=4)
+    body_s= S("B",  fontSize=8,  textColor=colors.black, fontName="Helvetica")
+    small_s=S("SM", fontSize=7,  textColor=colors.grey,  fontName="Helvetica-Oblique")
+
+    story = []
+    story.append(Spacer(1, 3*cm))
+    story.append(Paragraph("RAPPORT PORTFOLIO", cover_title))
+    story.append(Paragraph("Analyse DEA-H Multi-Dimensionnelle", cover_sub))
+    story.append(HRFlowable(width="60%", thickness=2, color=NAVY, spaceAfter=16))
+    story.append(Paragraph(f"{dea.n} hôtels analysés", cover_sub))
+    story.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", cover_sub))
+    story.append(Spacer(1, 1*cm))
+    story.append(Paragraph("REIV Hospitality · DEA-H v3.9", S("ft", fontSize=10, textColor=colors.grey, alignment=TA_CENTER)))
+    story.append(PageBreak())
+
+    story.append(Paragraph("📊 Dashboard Portfolio", h1_s))
+    avg_bcc   = sum(dea.bcc_scores.values()) / len(dea.bcc_scores)
+    n_eff     = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
+    n_crit    = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
+    avg_scale = sum(dea.scale_efficiency.values()) / len(dea.scale_efficiency)
+    kpi_data  = [
+        ["KPI", "Valeur", "Interprétation"],
+        ["Efficacité BCC moyenne",          f"{avg_bcc:.1%}",   "Gestion pure du portefeuille"],
+        ["Hôtels efficaces (BCC ≥ 99.9%)", f"{n_eff}/{dea.n}", "Sur la frontière de best practice"],
+        ["Hôtels critiques (BCC < 85%)",    f"{n_crit}/{dea.n}","Plan d'action prioritaire"],
+        ["Efficacité d'échelle moyenne",   f"{avg_scale:.1%}", "Adéquation taille / marché"],
+    ]
+    kt = Table(kpi_data, colWidths=[5*cm, 3*cm, 6*cm])
+    kt.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),NAVY), ("TEXTCOLOR",(0,0),(-1,0),WHITE),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),8),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LGRAY]),
+        ("GRID",(0,0),(-1,-1),0.3,colors.lightgrey),
+    ]))
+    story.append(kt); story.append(Spacer(1, 10))
+
+    story.append(Paragraph("🏆 Top Hôtels — Classement TOPSIS", h1_s))
+    top_data = [["Rang","Hôtel","Score TOPSIS","BCC","Scale Eff.","Quadrant"]]
+    for _, r in dea.get_topsis_ranking().head(top_n).iterrows():
+        h = r["Hôtel"]; q = dea.quadrants.get(h,"—")
+        top_data.append([f"#{int(r['Rang'])}", h[:22], f"{r['Score TOPSIS']:.3f}",
+                         f"{dea.bcc_scores.get(h,0):.1%}",
+                         f"{dea.scale_efficiency.get(h,0):.1%}",
+                         quadrant_labels.get(q,q)[:12]])
+    tt = Table(top_data, colWidths=[1.5*cm,5.5*cm,2.5*cm,1.8*cm,2*cm,2.5*cm])
+    tt.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),NAVY), ("TEXTCOLOR",(0,0),(-1,0),WHITE),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),7.5),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LGRAY]),
+        ("GRID",(0,0),(-1,-1),0.3,colors.lightgrey),
+    ]))
+    story.append(tt); story.append(Spacer(1, 10))
+
+    story.append(Paragraph("🔴 Hôtels Critiques — Plan d'Action", h1_s))
+    critical = [h for h in dea.hotels if dea.bcc_scores[h] < 0.85]
+    if critical:
+        crit_data = [["Hôtel","BCC","Quadrant","Upside ETP (k€/an)"]]
+        for h in critical:
+            se  = dea.slacks.get(h,{}).get("inputs",{}).get("nb_employes",0)
+            uf  = round(se * 35000 / 1000)
+            crit_data.append([h[:22], f"{dea.bcc_scores[h]:.1%}",
+                               quadrant_labels.get(dea.quadrants.get(h,"—"),"—")[:14],
+                               str(uf) if uf > 0 else "—"])
+        ct = Table(crit_data, colWidths=[5.5*cm,2*cm,3.5*cm,3.5*cm])
+        ct.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,0),RED), ("TEXTCOLOR",(0,0),(-1,0),WHITE),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),7.5),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LGRAY]),
+            ("GRID",(0,0),(-1,-1),0.3,colors.lightgrey),
+        ]))
+        story.append(ct)
+    else:
+        story.append(Paragraph("✅ Aucun hôtel critique (BCC ≥ 85%).", body_s))
+
+    story.append(Spacer(1, 12))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
+    story.append(Paragraph("DEA-H v3.9 · REIV Hospitality · Confidentiel", small_s))
+    doc.build(story)
+    return buf.getvalue()
+
 
 # --- malmquist_tobit inline ---
 """
@@ -897,7 +1022,7 @@ with st.sidebar:
         "CSV : hotel_name (index), nb_lits, nb_employes, couts_op_ex, revpar, satisfaction, taux_occupation",
         type=['csv'],
     )
-    use_sample = st.checkbox("📋 Données d'exemple (15 hôtels FR)", value=(uploaded_file is None))
+    use_sample = st.checkbox("📋 Données d'exemple — Meliá Group Espagne (24 hôtels)", value=(uploaded_file is None))
 
 # ─────────────────────────────────────────────
 #  Chargement des données
@@ -905,21 +1030,47 @@ with st.sidebar:
 NUMERIC_COLS = ['nb_lits', 'nb_employes', 'couts_op_ex', 'revpar', 'satisfaction', 'taux_occupation']
 
 def load_sample() -> pd.DataFrame:
+    """
+    Portefeuille de référence — Meliá Group Espagne (24 hôtels)
+    DEA-H v3.9 · REIV Hospitality
+    Satisfaction /5→/10 · couts_op_ex M€ · financiers k€
+    Active tous les onglets : Capital · MDEA · Malmquist · ESG · Multi-Module
+    """
     d = {
-        'hotel_name':       ['Paris_Opéra','Lyon_PartDieu','Marseille_VP','Nice_Prom','Bordeaux_Ctr',
-                             'Cannes_Carlton','Toulouse_Cap','Nantes_Atl','Strasbourg_Cat',
-                             'Lille_GP','Rennes_Rep','Montpellier_Ant','Reims_Champ','Dijon_Palace','Annecy_Lac'],
-        'nb_lits':          [120,180,85,150,95,200,140,110,130,160,100,125,145,135,90],
-        'nb_employes':      [105,112,30,144,63,163,77,40,77,96,41,57,82,80,70],
-        'couts_op_ex':      [8.5,8.5,3.1,10.9,4.6,15.9,4.8,3.8,7.4,8.6,3.3,5.2,6.7,6.3,8.4],
-        'revpar':           [280,110,160,105,75,115,130,95,140,120,110,105,125,115,135],
-        'satisfaction':     [9.2,8.6,9.2,9.1,8.6,7.9,7.9,8.3,9.0,8.2,8.0,7.9,8.9,7.8,8.8],
-        'taux_occupation':  [85,78,82,75,70,76,79,74,81,77,72,75,80,73,78],
+        'hotel_name': ['Meliá South Beach', 'Meliá Calviá Beach', 'Sol Wave House All Suites', 'Sol Barbados', 'Sol House The Studio', 'Sol Guadalupe', 'Innside by Meliá Calviá Beach', 'ME Marbella', 'Meliá Madrid Princesa', 'Meliá Galgos (Madrid)', 'Meliá Castilla (Madrid - Part)', 'Tryp Madrid Gran Vía', 'Tryp Madrid Chamartín', 'Tryp Madrid Atocha', 'Meliá Atlanterra (Cadix)', 'Meliá Sol y Nieve (Sierra Nevada)', 'Sol Pelicanos Ocas (Benidorm)', 'Meliá Puerto de la Cruz (Ténérife)', 'Sol Lanzarote', 'Meliá Sierra Nevada', 'Meliá María Pita (La Corogne)', 'Meliá San Sebastián Orly', 'Meliá Alicante', 'Sol Príncipe (Torremolinos)'],
+        'nb_lits': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
+        'nb_employes': [85, 110, 65, 120, 95, 100, 90, 140, 115, 130, 160, 55, 60, 50, 95, 85, 210, 95, 110, 75, 60, 40, 170, 220],
+        'couts_op_ex': [3.84, 4.92, 2.88, 5.52, 4.56, 4.68, 4.2, 6.24, 5.16, 5.88, 7.32, 2.52, 2.76, 2.28, 4.32, 4.08, 9.36, 3.96, 4.8, 3.48, 2.64, 1.92, 8.16, 9.72],
+        'revpar': [145, 138, 120, 115, 125, 98, 130, 260, 155, 140, 165, 110, 95, 118, 142, 135, 85, 90, 105, 128, 88, 150, 122, 95],
+        'satisfaction': [9.0, 8.6, 8.2, 8.4, 8.8, 8.0, 9.2, 9.4, 8.8, 8.4, 8.6, 7.8, 8.0, 8.2, 9.0, 8.6, 8.0, 8.2, 8.6, 8.4, 8.8, 9.2, 8.4, 8.2],
+        'taux_occupation': [82, 79, 85, 88, 81, 76, 84, 73, 78, 75, 80, 83, 74, 81, 86, 68, 92, 84, 87, 65, 72, 79, 83, 89],
+        'surface_m2': [9600, 12640, 7360, 13680, 11600, 12120, 10880, 7200, 10960, 14240, 16000, 7000, 7960, 5960, 11520, 10320, 31760, 12000, 13720, 8840, 7320, 4080, 21800, 31960],
+        'gop': [4740.6, 5727.3, 3122.5, 5731.0, 4851.0, 3730.7, 4923.9, 5654.9, 5480.3, 6190.7, 8768.8, 2645.5, 2316.5, 2363.9, 5838.8, 3927.0, 10298.6, 3758.2, 5205.4, 3049.9, 1925.8, 2004.3, 9163.3, 11211.9],
+        'capex_annuel': [360.0, 474.0, 276.0, 513.0, 435.0, 454.5, 408.0, 270.0, 411.0, 534.0, 600.0, 262.5, 298.5, 223.5, 432.0, 387.0, 1191.0, 450.0, 514.5, 331.5, 274.5, 153.0, 817.5, 1198.5],
+        'classement_etoiles': [5, 4, 4, 4, 4, 3, 5, 5, 5, 4, 5, 3, 3, 4, 5, 4, 3, 3, 4, 4, 3, 5, 4, 3],
+        'energy_kwh': [2190000, 2883500, 1679000, 3120750, 2646250, 2764875, 2482000, 1642500, 2500250, 3248500, 3650000, 1596875, 1815875, 1359625, 2628000, 2354250, 7245250, 2737500, 3129875, 2016625, 1669875, 930750, 4973125, 7290875],
+        'water_m3': [43800, 57670, 33580, 62415, 52925, 55298, 49640, 32850, 50005, 64970, 73000, 31938, 36318, 27193, 52560, 47085, 144905, 54750, 62598, 40333, 33398, 18615, 99463, 145818],
+        'co2_tonnes': [1095, 1442, 840, 1560, 1323, 1382, 1241, 821, 1250, 1624, 1825, 798, 908, 680, 1314, 1177, 3623, 1369, 1565, 1008, 835, 465, 2487, 3645],
+        'payroll_total': [3400.0, 4400.0, 2600.0, 4800.0, 3800.0, 4000.0, 3600.0, 5600.0, 4600.0, 5200.0, 6400.0, 2200.0, 2400.0, 2000.0, 3800.0, 3400.0, 8400.0, 3800.0, 4400.0, 3000.0, 2400.0, 1600.0, 6800.0, 8800.0],
+        'rooms_revenue': [10416.6, 12598.7, 6853.7, 12617.5, 10704.4, 8221.4, 10821.7, 12472.2, 12077.6, 13617.0, 19272.0, 5825.4, 5101.2, 5207.2, 12842.5, 8639.5, 22634.4, 8281.8, 11440.4, 6714.1, 4232.4, 4415.0, 20146.8, 24641.4],
+        'fb_revenue': [3125.0, 3779.6, 2056.1, 3785.2, 3211.3, 2466.4, 3246.5, 3741.7, 3623.3, 4085.1, 5781.6, 1747.6, 1530.3, 1562.1, 3852.7, 2591.8, 6790.3, 2484.5, 3432.1, 2014.2, 1269.7, 1324.5, 6044.1, 7392.4],
+        'total_revenue': [14270.8, 17260.2, 9389.6, 17285.9, 14665.0, 11263.3, 14825.7, 17087.0, 16546.3, 18655.3, 26402.6, 7980.8, 6988.6, 7133.8, 17594.2, 11836.1, 31009.1, 11346.0, 15673.3, 9198.3, 5798.4, 6048.5, 27601.2, 33758.7],
+        'rooms_cost': [2604.2, 3527.6, 1919.0, 3532.9, 2997.2, 2630.8, 2705.4, 3118.1, 3019.4, 3812.8, 4818.0, 1864.1, 1632.4, 1458.0, 3210.6, 2419.1, 7243.0, 2650.2, 3203.3, 1879.9, 1354.4, 1103.8, 5641.1, 7885.2],
+        'fb_cost': [2250.0, 2721.3, 1480.4, 2725.3, 2312.1, 1775.8, 2337.5, 2694.0, 2608.8, 2941.3, 4162.8, 1258.3, 1101.8, 1124.7, 2773.9, 1866.1, 4889.0, 1788.8, 2471.1, 1450.2, 914.2, 953.6, 4351.8, 5322.5],
+        'adr': [176.8, 174.7, 141.2, 130.7, 154.3, 128.9, 154.8, 356.2, 198.7, 186.7, 206.2, 132.5, 128.4, 145.7, 165.1, 198.5, 92.4, 107.1, 120.7, 196.9, 122.2, 189.9, 147.0, 106.7],
+        'trevpar': [162.9, 149.6, 139.8, 138.5, 138.5, 101.8, 149.3, 260.1, 165.4, 143.6, 180.8, 124.9, 96.2, 131.2, 167.4, 125.7, 107.0, 103.6, 125.2, 114.0, 86.8, 162.5, 138.8, 115.8],
+        'revenue_per_fte': [167.9, 156.9, 144.5, 144.0, 154.4, 112.6, 164.7, 122.0, 143.9, 143.5, 165.0, 145.1, 116.5, 142.7, 185.2, 139.2, 147.7, 119.4, 142.5, 122.6, 96.6, 151.2, 162.4, 153.4],
+        'book_value_assets': [67200, 56880, 33120, 61560, 52200, 36360, 76160, 50400, 76720, 64080, 112000, 21000, 23880, 26820, 80640, 46440, 95280, 36000, 61740, 39780, 21960, 28560, 98100, 95880],
+        'ebitda': [4740.6, 5727.3, 3122.5, 5731.0, 4851.0, 3730.7, 4923.9, 5654.9, 5480.3, 6190.7, 8768.8, 2645.5, 2316.5, 2363.9, 5838.8, 3927.0, 10298.6, 3758.2, 5205.4, 3049.9, 1925.8, 2004.3, 9163.3, 11211.9],
+        'nb_lits_n1': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
+        'nb_employes_n1': [86, 108, 65, 121, 94, 101, 87, 143, 115, 126, 163, 55, 58, 49, 92, 82, 208, 92, 110, 72, 61, 40, 164, 212],
+        'couts_op_ex_n1': [3.728, 5.037, 2.825, 5.564, 4.566, 4.593, 4.227, 6.33, 5.123, 6.011, 7.184, 2.48, 2.695, 2.265, 4.406, 4.004, 9.331, 4.049, 4.796, 3.501, 2.641, 1.929, 7.978, 9.832],
+        'revpar_n1': [136.0, 131.5, 115.7, 106.6, 114.0, 89.9, 124.8, 241.7, 142.3, 131.5, 154.3, 103.9, 86.8, 109.4, 135.2, 123.2, 80.2, 86.0, 96.6, 116.7, 83.2, 140.4, 117.1, 91.8],
+        'satisfaction_n1': [9.0, 8.5, 8.2, 8.4, 8.7, 8.0, 9.2, 9.4, 8.6, 8.4, 8.5, 7.8, 7.9, 8.0, 9.0, 8.4, 7.8, 8.0, 8.5, 8.2, 8.7, 9.2, 8.2, 8.0],
+        'taux_occupation_n1': [79.2, 75.1, 80.2, 82.7, 75.8, 71.1, 82.9, 70.5, 76.3, 73.3, 74.9, 79.0, 72.6, 78.4, 83.0, 64.6, 87.0, 81.1, 84.5, 64.1, 67.2, 77.0, 77.4, 85.9],
+        'rooms_revenue_n1': [10043.1, 12136.1, 6208.2, 11611.8, 10203.3, 7922.6, 9996.6, 11884.6, 11708.7, 12936.4, 17688.2, 5294.7, 4709.9, 5002.8, 12319.0, 8036.9, 20559.6, 7987.9, 10952.7, 6442.2, 3858.8, 4242.1, 18631.8, 22901.8],
     }
-    df = pd.DataFrame(d).set_index('hotel_name')
-    df.loc['Toulouse_Cap',   'nb_employes'] = int(df.loc['Toulouse_Cap', 'nb_employes'] * 1.4)
-    df.loc['Lille_GP',       'couts_op_ex'] = df.loc['Lille_GP', 'couts_op_ex'] * 1.3
-    return df
+    return pd.DataFrame(d).set_index('hotel_name')
 
 if uploaded_file is not None:
     import io
@@ -1142,37 +1293,175 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.t
 # TAB 1 — RAPPORT BOARD
 # ══════════════════════════════════════════════
 with tab1:
-    # Alerte ratio DMUs/variables
+
+    # ── Alerte ratio DMUs/variables ──────────────────────────────────────────
     if getattr(dea, '_dmu_ratio_warning', False):
-        st.warning(
-            f"⚠️ **Ratio DMUs/variables insuffisant** : {dea._dmu_ratio_info} — "
-            "Scores DEA potentiellement sur-efficients. Augmentez le compset ou réduisez les variables. "
-            "Réf. : Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) ; Raab & Lichty (2002)."
-        )
-    st.markdown('<p class="section-title">📋 Rapport Stratégique — Comité d\'Investissement</p>', unsafe_allow_html=True)
+        st.warning(f"⚠️ **Ratio DMUs/variables insuffisant** : {dea._dmu_ratio_info} — Réf. : Raab & Lichty (2002).")
+
+    # ── Header contextuel ────────────────────────────────────────────────────
+    _orient_lbl = "📥 Input-Oriented" if getattr(dea, 'orientation', 'input') == 'input' else "📤 Output-Oriented"
+    st.markdown(
+        f"<div style='background:#1a3a5c;color:white;padding:10px 16px;border-radius:8px;margin-bottom:12px;'>"
+        f"<b>DEA-H v3.9 — Rapport Comité d'Investissement</b> &nbsp;·&nbsp; "
+        f"{dea.n} hôtels analysés &nbsp;·&nbsp; {_orient_lbl} &nbsp;·&nbsp; "
+        f"{datetime.now().strftime('%d/%m/%Y')}</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── KPI Cards ────────────────────────────────────────────────────────────
+    _avg_bcc   = np.mean(list(dea.bcc_scores.values()))
+    _n_eff     = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
+    _n_crit    = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
+    _avg_scale = np.mean(list(dea.scale_efficiency.values()))
+    _best_tp   = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
+    _kc1, _kc2, _kc3, _kc4, _kc5 = st.columns(5)
+    _kc1.metric("📊 BCC moyen",        f"{_avg_bcc:.1%}", delta=f"{_avg_bcc-0.85:+.1%} vs seuil 85%")
+    _kc2.metric("🏆 Hôtels efficaces", f"{_n_eff}/{dea.n}", delta=f"{_n_eff/dea.n:.0%}", delta_color="off")
+    _kc3.metric("⚙️ Scale Eff. moy.", f"{_avg_scale:.1%}")
+    _kc4.metric("🔴 Critiques <85%",  _n_crit, delta=f"{_n_crit/dea.n:.0%}", delta_color="inverse")
+    _kc5.metric("🥇 Leader TOPSIS",   (_best_tp[:18] if len(_best_tp) > 18 else _best_tp))
+
+    # ── Upside financier total ───────────────────────────────────────────────
+    _FT_B = {1:0.30, 2:0.35, 3:0.45, 4:0.55, 5:0.65}
+    _up_fte = _up_rev = _up_gop = 0.0
+    for _h in dea.hotels:
+        _lits  = float(dea.df.loc[_h, 'nb_lits'])
+        _occ   = float(dea.df.loc[_h, 'taux_occupation']) / 100
+        _se    = dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', 0)
+        _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
+        _stars = int(dea.df.loc[_h, 'classement_etoiles']) if 'classement_etoiles' in dea.df.columns else 4
+        _ft    = _FT_B.get(_stars, 0.45)
+        _up_fte += _se * avg_salary / 1000
+        _up_rev += _sr * _lits * jours_exploit * _occ * revpar_value / 1_000_000
+        _up_gop += _sr * _lits * jours_exploit * _occ * revpar_value * _ft / 1_000_000
+    st.markdown("---")
+    _uc1, _uc2, _uc3 = st.columns(3)
+    _uc1.metric("💼 Upside ETP total",      f"{_up_fte:,.0f} k€/an",  help="Réduction masse salariale si alignement sur frontière DEA")
+    _uc2.metric("🏨 Upside RevPAR total",   f"{_up_rev:.2f} M€/an",   help="Revenu additionnel si tous les actifs atteignent leur RevPAR cible")
+    _uc3.metric("💰 Upside GOP /FT estimé", f"{_up_gop:.2f} M€/an",   help="Upside GOP ajusté Flow Through benchmark STR par étoiles")
+
+    # ── Verdict stratégique automatique ─────────────────────────────────────
+    st.markdown("---")
+    _qc = {}
+    for _h in dea.hotels:
+        _q = dea.quadrants.get(_h, 'Q4'); _qc[_q] = _qc.get(_q, 0) + 1
+    _q1, _q2, _q3, _q4 = _qc.get('Q1',0), _qc.get('Q2',0), _qc.get('Q3',0), _qc.get('Q4',0)
+    if _avg_bcc >= 0.90 and _q1 >= dea.n * 0.6:
+        _vrd = "✅ Portefeuille mature — efficience élevée. Stratégie de rétention et benchmarking opérationnel."
+        _vc  = "#1e8449"
+    elif _q3 >= dea.n * 0.4:
+        _vrd = "🧠 Problème de gestion dominant (Q3) — actifs bien dimensionnés mais sous-exploités. Plan opérationnel prioritaire."
+        _vc  = "#e67e22"
+    elif _q4 >= dea.n * 0.3:
+        _vrd = "🔴 Portefeuille sous pression — actifs en Q4 (double inefficience). Arbitrage et restructuration recommandés."
+        _vc  = "#c0392b"
+    elif _q2 >= dea.n * 0.4:
+        _vrd = "⚙️ Problème d'échelle structurel (Q2) — gestion saine, taille inadaptée. Croissance ou cession sélective."
+        _vc  = "#2e6da4"
+    else:
+        _vrd = f"📊 Portefeuille mixte ({_q1} Q1 · {_q2} Q2 · {_q3} Q3 · {_q4} Q4) — approche différenciée par quadrant."
+        _vc  = "#555555"
+    st.markdown(
+        f"<div style='background:{_vc}18;border-left:4px solid {_vc};"
+        f"padding:10px 16px;border-radius:0 6px 6px 0;margin:4px 0 12px 0;'>"
+        f"<b>Verdict Stratégique</b> — {_vrd}</div>", unsafe_allow_html=True)
+
+    # ── Graphiques côte à côte ───────────────────────────────────────────────
+    _gc1, _gc2 = st.columns(2)
+    with _gc1:
+        _bvals = [dea.bcc_scores[h] for h in dea.hotels]
+        _fig_h = go.Figure(go.Histogram(x=_bvals, nbinsx=10, marker_color='#2e6da4', opacity=0.8))
+        _fig_h.add_vline(x=_avg_bcc, line_dash="dash", line_color="red", annotation_text=f"Moy. {_avg_bcc:.1%}")
+        _fig_h.update_layout(title="Distribution BCC", xaxis=dict(title="Score BCC", tickformat='.0%'),
+                             yaxis_title="Nb hôtels", height=300, paper_bgcolor='rgba(0,0,0,0)',
+                             margin=dict(l=40,r=20,t=40,b=40))
+        st.plotly_chart(_fig_h, use_container_width=True)
+    with _gc2:
+        _qcols = {'Q1':'#1e8449','Q2':'#2e6da4','Q3':'#e67e22','Q4':'#c0392b'}
+        _fig_q = go.Figure()
+        for _h in dea.hotels:
+            _qq = dea.quadrants.get(_h,'Q4')
+            _fig_q.add_trace(go.Scatter(x=[dea.scale_efficiency[_h]], y=[dea.bcc_scores[_h]],
+                mode='markers+text', text=[_h[:12]], textposition='top center',
+                textfont=dict(size=7), marker=dict(size=9, color=_qcols.get(_qq,'gray')), showlegend=False))
+        _fig_q.add_hline(y=bcc_threshold, line_dash='dash', line_color='lightgray', line_width=1)
+        _fig_q.add_vline(x=scale_threshold, line_dash='dash', line_color='lightgray', line_width=1)
+        _fig_q.update_layout(title="Carte Quadrants BCC × Scale",
+            xaxis=dict(title="Scale Efficiency", range=[0.5,1.05], tickformat='.0%'),
+            yaxis=dict(title="Score BCC", range=[0.3,1.05], tickformat='.0%'),
+            height=300, paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=40,r=20,t=40,b=40))
+        st.plotly_chart(_fig_q, use_container_width=True)
+
+    # ── Top 3 / Bottom 3 ────────────────────────────────────────────────────
+    st.markdown("---")
+    _tc1, _tc2 = st.columns(2)
+    with _tc1:
+        st.markdown('<p class="section-title">🏆 Top 3 — Leaders TOPSIS</p>', unsafe_allow_html=True)
+        for _i, _h in enumerate(sorted(dea.hotels, key=lambda h: dea.topsis_ranks[h])[:3], 1):
+            _bcc_h = dea.bcc_scores[_h]; _c = '#1e8449' if _bcc_h >= 0.90 else '#f39c12'
+            st.markdown(
+                f"<div style='padding:8px 12px;background:#f8f9fa;border-left:3px solid {_c};"
+                f"border-radius:0 4px 4px 0;margin-bottom:6px;'>"
+                f"<b>#{_i} {_h}</b><br/><small>BCC {_bcc_h:.1%} · TOPSIS {dea.topsis_scores[_h]:.3f} · "
+                f"{QUADRANT_LABELS.get(dea.quadrants.get(_h,''),'')}</small></div>", unsafe_allow_html=True)
+    with _tc2:
+        st.markdown('<p class="section-title">🔴 Bottom 3 — Priorités</p>', unsafe_allow_html=True)
+        for _h in sorted(dea.hotels, key=lambda h: dea.bcc_scores[h])[:3]:
+            _bcc_h = dea.bcc_scores[_h]
+            _uf = round(dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes',0) * avg_salary / 1000)
+            st.markdown(
+                f"<div style='padding:8px 12px;background:#fff5f5;border-left:3px solid #c0392b;"
+                f"border-radius:0 4px 4px 0;margin-bottom:6px;'>"
+                f"<b>{_h}</b><br/><small>BCC {_bcc_h:.1%} · "
+                f"{QUADRANT_LABELS.get(dea.quadrants.get(_h,''),'')}"
+                f"{f' · Upside ETP : {_uf} k€/an' if _uf > 0 else ''}</small></div>", unsafe_allow_html=True)
+
+    # ── Tableau Board + Quadrants + Mahalanobis ──────────────────────────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">📋 Tableau Consolidé — Tous les actifs</p>', unsafe_allow_html=True)
     st.dataframe(board, use_container_width=True, hide_index=True)
     st.markdown('<p class="section-title">Répartition par Quadrant</p>', unsafe_allow_html=True)
     q_summary = dea.get_quadrant_summary()
     st.dataframe(q_summary.drop(columns=['Hôtels'], errors='ignore'), use_container_width=True, hide_index=True)
-
-    # ── Détection outliers Mahalanobis (Poldrugovac et al. 2016) ─────────────────────
     st.markdown('<p class="section-title">Détection Outliers — Distance de Mahalanobis</p>', unsafe_allow_html=True)
-    st.caption("Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) ; Kerstens (1996) — D² suit une loi χ² à k degrés de liberté. Outlier si p < 0.01. Exclure les outliers avant interprétation des scores DEA.")
-
+    st.caption("Poldrugovac et al. (2016) — D² ∼ χ²(k). Outlier si p < 0.01.")
     _mah_df = dea.detect_outliers_mahalanobis(threshold_p=0.01)
-    _n_outliers = _mah_df['Outlier'].sum()
-
-    if _n_outliers > 0:
-        _outlier_names = _mah_df[_mah_df['Outlier']]['Hôtel'].tolist()
-        st.error(f"**{_n_outliers} outlier(s) détecté(s) :** {', '.join(_outlier_names)} — vérifier la cohérence du compset avant interprétation.")
+    _n_out  = _mah_df['Outlier'].sum()
+    if _n_out > 0:
+        st.error(f"**{_n_out} outlier(s) :** {', '.join(_mah_df[_mah_df['Outlier']]['Hôtel'].tolist())} — vérifier le compset.")
     else:
-        st.success("✅ Aucun outlier détecté (p > 0.01 pour tous les DMUs) — compset homogène.")
-
+        st.success("✅ Aucun outlier (p > 0.01) — compset homogène.")
     st.dataframe(_mah_df, use_container_width=True, hide_index=True)
-    st.caption("D² = distance de Mahalanobis au centre du nuage de points | p-value = probabilité sous H0 : 'ce DMU appartient à la distribution' | Seuil : p < 0.01")
+
+    # ── Export Portfolio PDF ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">📥 Rapport Portfolio PDF</p>', unsafe_allow_html=True)
+    st.caption("Rapport comité : couverture · KPIs · Top TOPSIS · Hôtels critiques.")
+    _rpc1, _rpc2 = st.columns([3, 1])
+    with _rpc1:
+        top_n_portfolio = st.slider("Hôtels dans le Top", 3, min(20, dea.n), min(10, dea.n), key="top_n_slider")
+    with _rpc2:
+        if st.button("📊 Générer", key="portfolio_pdf_btn", type="primary"):
+            with st.spinner("Génération PDF..."):
+                try:
+                    _rp = generate_portfolio_report_pdf(dea=dea, quadrant_labels=QUADRANT_LABELS, top_n=top_n_portfolio)
+                    if _rp:
+                        st.session_state["portfolio_pdf"] = _rp
+                        st.success(f"✅ {len(_rp)//1024} Ko")
+                    else:
+                        st.error("ReportLab non disponible")
+                except Exception as _e:
+                    st.error(f"Erreur : {_e}")
+    if st.session_state.get("portfolio_pdf"):
+        st.download_button("⬇️ Télécharger Rapport Portfolio PDF",
+            data=st.session_state["portfolio_pdf"],
+            file_name=f"rapport_portfolio_DEA-H_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf", key="dl_portfolio_pdf")
+
+    st.caption("📚 *Réf. : Charnes, Cooper & Rhodes (1978) · Banker et al. (1984) · "
+               "Poldrugovac et al. (2016) Mahalanobis · Hwang & Yoon (1981) TOPSIS.*")
 
 
-# ══════════════════════════════════════════════
 # TAB 2 — DASHBOARD KPIs
 # ══════════════════════════════════════════════
 with tab2:
