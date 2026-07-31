@@ -2415,7 +2415,9 @@ with tab8:
     display_cols = ['Hôtel', 'Groupe', 'GTE', 'MTE', 'TGR', 'Interprétation']
     st.dataframe(meta_df[display_cols].sort_values('TGR'), use_container_width=True, hide_index=True)
 
-    grp_colors = px.colors.qualitative.Set2
+    # Convertir groupes en string (classement_etoiles = entiers → crash Plotly)
+    meta_df['Groupe'] = meta_df['Groupe'].astype(str)
+    grp_colors  = px.colors.qualitative.Set2
     unique_grps = meta_df['Groupe'].unique()
     color_map   = {g: grp_colors[i % len(grp_colors)] for i, g in enumerate(unique_grps)}
     fig_meta = go.Figure()
@@ -2424,7 +2426,7 @@ with tab8:
         fig_meta.add_trace(go.Scatter(
             x=sub['GTE'], y=sub['TGR'], mode='markers+text',
             text=sub['Hôtel'], textposition='top center', textfont=dict(size=9),
-            marker=dict(size=12, color=color_map[grp]), name=grp,
+            marker=dict(size=12, color=color_map[grp]), name=str(grp),
         ))
     fig_meta.add_hline(y=0.90, line_dash='dash', line_color='gray', opacity=0.4)
     fig_meta.add_vline(x=0.90, line_dash='dash', line_color='gray', opacity=0.4)
