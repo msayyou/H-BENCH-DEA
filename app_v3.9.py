@@ -1577,24 +1577,21 @@ with tab2:
 
     if _pct_eff < 0.12:
         st.warning(
-            f"⚠️ **Seulement {_n_eff_t2}/{dea.n} hôtels ({_pct_eff:.0%}) sur la frontière.** "
-            "La littérature empirique observe typiquement 15–25% de DMUs efficients dans un compset hôtelier "
-            "(Via@ 2013, 184 hôtels portugais : 18%). Un taux aussi bas peut signaler des inefficiences "
-            "réelles ou un compset trop hétérogène."
+            f"⚠️ **Seulement {_n_eff_t2}/{dea.n} hôtels ({_pct_eff:.0%}) sur la frontière** — "
+            "taux inhabituellement bas. Deux causes possibles : inefficiences réelles importantes, "
+            "ou compset trop hétérogène. Vérifier la cohérence du compset (Tab 1 — Mahalanobis)."
         )
     elif _pct_eff > 0.50:
         st.warning(
             f"⚠️ **{_n_eff_t2}/{dea.n} hôtels ({_pct_eff:.0%}) à BCC = 1** — taux inhabituellement élevé. "
-            "La littérature observe typiquement 15–25%. Un taux supérieur à 50% signale généralement "
-            "un compset trop petit (règle : n ≥ 3 × (inputs + outputs) = 18 minimum) "
-            "ou un compset trop homogène qui n'est pas assez discriminant. "
-            "Réf. : Raab & Lichty (2002), Poldrugovac et al. (2016)."
+            "Le compset est probablement trop petit ou trop homogène pour être discriminant. "
+            f"Rappel : minimum {3 * 6} hôtels pour 6 variables (règle 3×)."
         )
     else:
         st.success(
-            f"✅ **{_n_eff_t2}/{dea.n} hôtels ({_pct_eff:.0%}) sur la frontière d'efficience** — "
-            "conforme au benchmark empirique (15–25%). Le compset est suffisamment discriminant. "
-            "Réf. : Via@ (2013), 184 hôtels portugais : 18% efficients."
+            f"✅ **{_n_eff_t2}/{dea.n} hôtels ({_pct_eff:.0%}) sur la frontière** — "
+            "taux conforme aux benchmarks empiriques multi-études (15–25%). "
+            "Le compset est suffisamment discriminant."
         )
 
     hotels_list = dea.hotels
@@ -3201,10 +3198,9 @@ with tab10:
     st.caption('Caves, Christensen & Diewert (1982) ; Fare et al. (1994) -- Catch-up x Frontier Shift = TFP total.')
     st.markdown('<p class="section-title">🚀 Malmquist Productivity Index — Évolution temporelle</p>', unsafe_allow_html=True)
     st.caption(
-        "Caves, Christensen & Diewert (1982) Econometrica ; "
-        "Färe, Grosskopf, Norris & Zhang (1994) American Economic Review. "
         "Décompose la variation de productivité entre N-1 et N en deux effets : "
-        "Catch-up (gestion) × Frontier Shift (progrès sectoriel)."
+        "Catch-up (mérite de l\'opérateur) × Frontier Shift (progrès du marché). "
+        "Voir documentation méthodologique pour les références complètes."
     )
 
     # Vérifier colonnes N-1
@@ -3241,10 +3237,9 @@ with tab10:
             # ── Résumé Alpha — qui a créé de la valeur propre ? ──────────────
             st.markdown('<p class="section-title">Synthèse — Alpha opérateur vs Marée montante</p>', unsafe_allow_html=True)
             st.caption(
-                "**Alpha opérateur** = Catch-up > 1 : progrès dû au management, indépendamment du marché. "
+                "**Alpha opérateur** = Catch-up > 1 — progrès dû au management, indépendamment du marché. "
                 "**Marée montante** = TFP > 1 uniquement via Frontier Shift — l\'opérateur a suivi la vague "
-                "sans créer de valeur propre. Distinction clé pour évaluer un opérateur hôtelier. "
-                "Réf. : Caves et al. (1982) · Färe et al. (1994) · Via@ (2013)."
+                "sans créer de valeur propre. Voir documentation méthodologique pour les références."
             )
             _mq_s2 = _mq[_mq['Malmquist TFP'] != '—'].copy()
             for _c in ['Catch-up','Frontier Shift','Malmquist TFP']:
@@ -3678,8 +3673,27 @@ with tab12:
 #  Footer
 # ─────────────────────────────────────────────
 st.markdown("---")
-st.caption(
-    f"DEA-H v3.9 · REIV Hospitality · {datetime.now().strftime('%d/%m/%Y')} · "
-    "Modèles : BCC/CCR · TOPSIS · K-means · Metafrontière · Multi-Module DEA (7 dimensions) · "
-    "Méthodologie : Charnes et al. (1978), Banker et al. (1984), Min et al. (2009), Assaf et al. (2009), Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958)"
+st.markdown("---")
+st.markdown(
+    """<div style='text-align:center;color:#94a3b8;font-size:0.75rem;line-height:1.8;padding:0.5rem 0;'>
+    <b>DEA-H v3.9 · REIV Hospitality · Mehdi Sayyou</b><br>
+    Modèles : BCC/CCR Input/Output-Oriented · TOPSIS Shannon entropy · K-means · Metafrontière GTE/MTE/TGR ·
+    Malmquist TFP (Catch-up × Frontier Shift) · Tobit Second Stage · Multi-Module DEA (7 dimensions)<br>
+    <b>Références :</b>
+    Charnes, Cooper &amp; Rhodes (1978) CCR ·
+    Banker, Charnes &amp; Cooper (1984) BCC ·
+    Barros (2005) format Barros ·
+    Min, Min &amp; Joo (2009) USALI ·
+    Assaf, Barros &amp; Josiassen (2010) Metafrontière ·
+    Shang, Wang &amp; Hung (2010) Stochastic DEA ·
+    Yu (2012) MDEA Room/F&amp;B · Mann-Whitney ·
+    Simar &amp; Wilson (2007) Tobit bootstrap ·
+    Caves, Christensen &amp; Diewert (1982) Malmquist ·
+    Färe, Grosskopf, Norris &amp; Zhang (1994) Décomposition TFP ·
+    Poldrugovac, Tekavcic &amp; Jankovic (2016) Mahalanobis ·
+    Vlad, Toma &amp; Fîntîneru (2026) TOPSIS entropy ·
+    Shirouyehzad et al. (2012) SERVQUAL ·
+    Via@ (2013) Benchmark 15–25% · Alpha opérateur
+    </div>""",
+    unsafe_allow_html=True,
 )
