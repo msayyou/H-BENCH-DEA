@@ -2019,13 +2019,30 @@ with tab5:
 - **Q3 🧠 Gestion** : BCC < seuil MAIS Scale ≥ seuil → Problème de gestion pure → plan opérationnel
 - **Q4 🔴 Double** : BCC < seuil ET Scale < seuil → Intervention prioritaire
         """)
-        st.caption(
-            "ℹ️ Q2 : le problème d\'échelle est structurel. "
-            "Ne pas relancer en Output-Oriented — cela reformule la question sans changer le diagnostic. "
-            "L\'outil correct est le **TGR (Metafrontière, Onglet 8)** qui mesure l\'écart "
-            "entre la technologie du groupe et la meilleure technologie disponible. "
-            "Réf. : Assaf, Barros & Josiassen (2010)."
-        )
+        with st.expander("ℹ️ Hôtels Q2 — Comment les interpréter et quoi faire"):
+            st.markdown(
+                """
+**Q2 = BCC ≥ seuil ET Scale Efficiency < seuil**
+
+L'hôtel est **bien géré** (gestion pure efficiente) mais **mal dimensionné** pour son marché :
+trop petit pour bénéficier des économies d'échelle, ou trop grand pour remplir sa capacité
+au niveau de prix du segment.
+
+**Pourquoi ne pas relancer en Output-Oriented ?**
+Changer d'orientation pose la question *"avec ces ressources, que devrait-il produire ?"*
+Mais si le problème est la taille (80 chambres dans un marché 200+ chambres, ou l'inverse),
+la réponse ne changera pas le diagnostic. Le score sera différent, la prescription identique.
+
+**Ce qu'il faut lire : TGR (Metafrontière, Tab 8)**
+
+| TGR | Lecture | Décision |
+|---|---|---|
+| TGR faible | Segment structurellement défavorable | Cession · Repositionnement · Extension |
+| TGR élevé | Bon segment, problème d'échelle conjoncturel | Croissance · Mix produit |
+
+Réf. : Assaf, Barros & Josiassen (2010) — metafrontière GTE/MTE/TGR.
+                """
+            )
     with col2:
         q_df = dea.get_quadrant_summary()
         st.dataframe(q_df[['Quadrant','N hôtels','BCC moyen','Eff. Éch.']], use_container_width=True, hide_index=True)
