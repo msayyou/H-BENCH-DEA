@@ -1360,6 +1360,17 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
     else:
         st.success("✅ Analyse terminée !")
 
+        # Signal Pastor (1996) si translation appliquée
+        if getattr(dea, 'translation_applied', {}):
+            _trans = dea.translation_applied
+            _detail = ', '.join(f'{k} (décalage +{v})' for k, v in _trans.items())
+            st.info(
+                f"ℹ️ **Translation invariance appliquée — Pastor (1996)** : {_detail}. "
+                "Valeurs non strictement positives détectées et corrigées automatiquement. "
+                "BCC-VRS est translation-invariant pour les outputs — scores valides. "
+                "Scores CCR calculés sur données originales (CCR non translation-invariant)."
+            )
+
 if 'dea' not in st.session_state:
     st.info("👆 Cliquez sur **LANCER L'ANALYSE** pour démarrer.")
     st.stop()
