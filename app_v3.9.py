@@ -1773,15 +1773,19 @@ with tab3:
             # Bar chart super-efficience
             _se_num = _se.copy()
             _se_num["_se_val"] = pd.to_numeric(_se_num["Super-Efficience"], errors="coerce")
+            # Couleurs par seuil (colorscale normalisé 0→1 obligatoire en Plotly)
+            _se_colors = [
+                "#1a8a4a" if v >= 1.5 else
+                "#27ae60" if v >= 1.1 else
+                "#f1c40f" if v >= 1.0 else
+                "#f39c12" if v >= 0.85 else "#e74c3c"
+                for v in _se_num["_se_val"]
+            ]
             fig_se = go.Figure(go.Bar(
                 x=_se_num["_se_val"], y=_se_num["Hôtel"], orientation="h",
-                marker=dict(
-                    color=_se_num["_se_val"],
-                    colorscale=[[0,"#e74c3c"],[0.7,"#f39c12"],[0.999,"#f1c40f"],[1.0,"#27ae60"],[1.5,"#1a8a4a"]],
-                    cmin=0.3, cmax=1.5, showscale=True,
-                    colorbar=dict(title="Score SE"),
-                ),
-                text=_se_num["Super-Efficience"], textposition="outside",
+                marker_color=_se_colors, opacity=0.85,
+                text=[f"{v:.3f}" for v in _se_num["_se_val"]],
+                textposition="outside",
             ))
             fig_se.add_vline(x=1.0, line_dash="dash", line_color="#27ae60",
                              annotation_text="Frontière BCC", annotation_font_color="#27ae60")
