@@ -1100,6 +1100,31 @@ with st.sidebar:
     scale_threshold = st.slider("Seuil Scale Efficiency", 0.70, 0.99, 0.90, 0.01)
 
     st.markdown("---")
+    st.subheader("📐 Mode variables (Raab & Lichty, 2002)")
+    _n_hotels = len(df) if 'df' in dir() else 0
+    if _n_hotels > 0 and _n_hotels < 18:
+        st.warning(f"⚠️ {_n_hotels} hôtels — en dessous du seuil standard (18). Voir mode ci-dessous.")
+
+    dea_mode = st.radio(
+        "Nombre de variables",
+        options=['standard', 'compact', 'minimal'],
+        format_func=lambda x: {
+            'standard': f"Standard (3+3) — min 18 hôtels · nb_lits + ETP + OpEx → RevPAR + Sat + TO",
+            'compact' : f"Compact (2+2) — min 12 hôtels · ETP + OpEx → RevPAR + Satisfaction",
+            'minimal' : f"Minimal (2+1) — min 9 hôtels  · ETP + OpEx → RevPAR",
+        }[x],
+        help="Réduire les variables si votre compset est petit. "
+             "Règle : n_hôtels ≥ 3 × (n_inputs + n_outputs). Réf. : Raab & Lichty (2002).",
+        index=0,
+    )
+
+    if dea_mode != 'standard':
+        st.caption(
+            "💡 En mode réduit, la **cross-efficience (Tab 3)** reste recommandée — "
+            "elle compense partiellement la sur-définition avec peu de DMUs."
+        )
+
+    st.markdown("---")
     st.subheader("🔄 Orientation du modèle")
     orientation = st.radio(
         "Modèle DEA",
@@ -1321,6 +1346,13 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         dea.hotels          = df.index.tolist()
         dea.n               = len(dea.hotels)
         dea.orientation     = orientation
+        dea.mode            = dea_mode if 'dea_mode' in dir() else 'standard'
+        dea.input_cols      = ['nb_employes','couts_op_ex'] if dea_mode in ('compact','minimal') else ['nb_lits','nb_employes','couts_op_ex']
+        dea.output_cols     = (['revpar'] if dea_mode == 'minimal' else ['revpar','satisfaction'])
+        if dea_mode == 'standard': dea.output_cols = ['revpar','satisfaction','taux_occupation']
+        _n_vars = len(dea.input_cols) + len(dea.output_cols)
+        dea._dmu_ratio_warning = dea.n < 3 * _n_vars
+        dea._dmu_ratio_info    = f"{dea.n} DMUs < 3×{_n_vars} = {3*_n_vars} [mode {dea_mode}]"
         dea.has_trevpar  = 'total_revenue'    in df.columns
         dea.has_surface  = 'surface_m2'       in df.columns
         dea.has_capex    = 'capex_annuel'     in df.columns
@@ -1328,8 +1360,8 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         dea.has_goppam   = 'surface_m2'       in df.columns and 'gop' in df.columns
         dea.has_stars    = 'classement_etoiles' in df.columns
         dea.has_flow     = 'gop_n1'           in df.columns and 'revenu_n1' in df.columns
-        dea.inputs          = df[['nb_lits','nb_employes','couts_op_ex']].values.astype(float)
-        dea.outputs         = df[['revpar','satisfaction','taux_occupation']].values.astype(float)
+        dea.inputs  = df[dea.input_cols].values.astype(float)
+        dea.outputs = df[dea.output_cols].values.astype(float)
         dea.bcc_scores      = {}; dea.ccr_scores      = {}; dea.scale_efficiency = {}
         dea.slacks          = {}; dea.peers            = {}; dea.targets          = {}
         dea.topsis_scores   = {}; dea.topsis_ranks     = {}
