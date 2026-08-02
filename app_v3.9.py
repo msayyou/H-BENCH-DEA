@@ -2511,9 +2511,12 @@ with tab8:
     st.markdown('<p class="section-title">🌐 Metafrontière — Analyse GTE / MTE / TGR</p>', unsafe_allow_html=True)
     st.info("""
 **Principe (Assaf et al., 2010) :**
-- **GTE** — efficience relative à la frontière de son groupe
-- **MTE** — efficience relative à la meilleure technologie toutes catégories
-- **TGR** (MTE/GTE) — écart entre technologie du groupe et meilleure technologie possible
+- **GTE** — efficience relative au meilleur modèle opératoire de son groupe (pairs du même segment)
+- **MTE** — efficience relative au meilleur modèle opératoire observé dans tout le compset
+- **TGR** (MTE/GTE) — écart entre le modèle opératoire du groupe et le meilleur modèle connu
+
+*"Technologie" = façon de combiner les inputs pour produire les outputs (jargon économique, pas IT).*
+Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellement défavorable → repositionnement stratégique, pas plan opérationnel.
     """)
     st.caption(
         "**Recommandation méthodologique :** si votre portefeuille mélange des catégories "
