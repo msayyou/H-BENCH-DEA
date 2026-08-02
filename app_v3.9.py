@@ -1772,7 +1772,7 @@ with tab3:
 
             # Bar chart super-efficience
             _se_num = _se.copy()
-            _se_num["_se_val"] = _se_num["Super-Efficience"].str.replace("%","").astype(float)
+            _se_num["_se_val"] = pd.to_numeric(_se_num["Super-Efficience"], errors="coerce")
             fig_se = go.Figure(go.Bar(
                 x=_se_num["_se_val"], y=_se_num["Hôtel"], orientation="h",
                 marker=dict(
