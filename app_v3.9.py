@@ -1848,8 +1848,8 @@ with tab3:
                 st.caption("Ligne j = poids du DMU j évaluant les colonnes k. Diagonale = auto-évaluation (score BCC).")
                 fig_hm = go.Figure(go.Heatmap(
                     z=_ce_matrix,
-                    x=_ce_matrix.columns.tolist(),
-                    y=_ce_matrix.index.tolist(),
+                    x=dea.hotels,
+                    y=dea.hotels,
                     colorscale="RdYlGn", zmin=0, zmax=1,
                     text=[[f"{v:.2f}" for v in row] for row in _ce_matrix],
                     texttemplate="%{text}", textfont=dict(size=8),
