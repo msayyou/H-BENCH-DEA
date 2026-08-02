@@ -1193,6 +1193,25 @@ if uploaded_file is not None:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df = df.dropna(subset=NUMERIC_COLS)
     st.sidebar.success(f"✅ {len(df)} hôtels chargés (séparateur : '{sep}')")
+
+    # ── Détection valeurs négatives ou nulles (Pastor 1996 / Tone 2001) ──────
+    _neg_issues = []
+    for _col in ['revpar', 'taux_occupation', 'nb_lits', 'nb_employes']:
+        if _col in df.columns:
+            _neg = (df[_col] <= 0).sum()
+            if _neg > 0:
+                _neg_issues.append(f"{_col} ({_neg} valeur{'s' if _neg>1 else ''} ≤ 0)")
+    if 'gop' in df.columns:
+        _neg_gop = (df['gop'] < 0).sum()
+        if _neg_gop > 0:
+            _neg_issues.append(f"gop ({_neg_gop} valeur{'s' if _neg_gop>1 else ''} négative{'s' if _neg_gop>1 else ''})")
+    if _neg_issues:
+        st.sidebar.warning(
+            f"⚠️ **Valeurs non strictement positives détectées :** {', '.join(_neg_issues)}. "
+            "Les modèles BCC/CCR exigent x > 0 et y > 0. "
+            "Les actifs concernés risquent de biaiser la frontière DEA. "
+            "Recommandation : les exclure du compset et les analyser séparément via l'onglet Fiche Actif (What-If)."
+        )
     # Invalidation cache si CSV change
     _new_hash = hash(raw[:2000] + str(len(df)))
     if st.session_state.get('_csv_hash') != _new_hash:
@@ -1805,7 +1824,20 @@ with tab3:
     if st.session_state.get("se_results") is not None and st.session_state.get("ce_results") is not None:
         st.markdown("---")
         st.markdown('<p class="section-title">Tableau de Décision Consolidé — BCC · Super-Eff. · Cross-Eff. · TOPSIS</p>', unsafe_allow_html=True)
-        st.caption("Doyle & Green (1994) ; Andersen & Petersen (1993) — Un actif robuste est performant sur les 4 dimensions.")
+        st.caption("Doyle & Green (1994) · Andersen & Petersen (1993) — Un actif robuste est performant sur les 4 dimensions.")
+        with st.expander("ℹ️ Limites de la cross-efficience — Assurance Regions (Thompson et al., 1990)"):
+            st.markdown(
+                """
+La cross-efficience traite les poids arbitraires **ex-post** (après optimisation).
+Les **Assurance Regions** (Thompson et al., 1990) les contraignent **ex-ante** dans le LP :
+
+> Exemple : `0.10 ≤ u_satisfaction / u_RevPAR ≤ 0.50`
+
+Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
+
+**Statut DEA-H :** non implémenté — évolution identifiée. Garde-fou actuel : ce tableau.
+                """
+            )
 
         _se_d = st.session_state.get("se_results")
         _ce_d = st.session_state.get("ce_results")
@@ -3219,6 +3251,29 @@ with tab10:
         st.warning(_warn_msg)
     else:
         st.success(f"✅ Colonnes N-1 détectées : {', '.join(_n1_present)}")
+
+        # ── Déflateur optionnel (biais d'inflation) ─────────────────────────
+        with st.expander("⚙️ Correction inflation (optionnel — recommandé)"):
+            st.caption(
+                "L'inflation sur les charges op' et le RevPAR peut simuler un Frontier Shift "
+                "artificiel. Renseignez le taux d'inflation entre N-1 et N pour corriger. "
+                "Réf. : Färe, Grosskopf, Norris & Zhang (1994)."
+            )
+            _deflate_on = st.checkbox("Appliquer la correction inflation", value=False)
+            _inflation_rate = st.number_input(
+                "Taux d'inflation N-1→N (%)",
+                min_value=0.0, max_value=20.0, value=3.0, step=0.1,
+                format="%.1f",
+                help="Ex : 3.0% pour corriger un Frontier Shift en données nominales. "
+                     "Source : INSEE (France), INE (Espagne), ONS (UK)."
+            ) / 100.0 if _deflate_on else 0.0
+
+        if _deflate_on and _inflation_rate > 0:
+            st.info(
+                f"✅ Correction inflation activée : {_inflation_rate*100:.1f}% — "
+                "les variables monétaires N-1 (revpar_n1, couts_op_ex_n1) seront "
+                "déflatées avant le calcul Malmquist."
+            )
 
         if st.button("🔄 Calculer Malmquist", key="mq_btn"):
             with st.spinner("Calcul des 4 problèmes DEA par DMU..."):
