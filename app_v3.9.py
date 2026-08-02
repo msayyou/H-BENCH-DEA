@@ -1785,11 +1785,11 @@ with tab3:
             with st.expander("🗺️ Matrice cross-efficience complète", expanded=False):
                 st.caption("Ligne j = poids du DMU j évaluant les colonnes k. Diagonale = auto-évaluation (score BCC).")
                 fig_hm = go.Figure(go.Heatmap(
-                    z=_ce_matrix.values,
+                    z=_ce_matrix,
                     x=_ce_matrix.columns.tolist(),
                     y=_ce_matrix.index.tolist(),
                     colorscale="RdYlGn", zmin=0, zmax=1,
-                    text=[[f"{v:.2f}" for v in row] for row in _ce_matrix.values],
+                    text=[[f"{v:.2f}" for v in row] for row in _ce_matrix],
                     texttemplate="%{text}", textfont=dict(size=8),
                     colorbar=dict(title="CE Score"),
                 ))
