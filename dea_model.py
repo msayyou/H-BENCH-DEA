@@ -37,6 +37,32 @@ warnings.filterwarnings('ignore')
 INPUT_COLS  = ['nb_lits', 'nb_employes', 'couts_op_ex']
 OUTPUT_COLS = ['revpar', 'satisfaction', 'taux_occupation']
 
+# ── Modes Micro-compset (Raab & Lichty 2002) ─────────────────────────────────
+# Quand n_DMUs < 3×(n_inputs+n_outputs), réduire les variables
+# Mode standard  : 3 inputs + 3 outputs → min 18 hôtels
+# Mode compact   : 2 inputs + 2 outputs → min 12 hôtels
+# Mode minimal   : 2 inputs + 1 output  → min  9 hôtels
+INPUT_MODES = {
+    'standard' : {
+        'inputs'  : ['nb_lits', 'nb_employes', 'couts_op_ex'],
+        'outputs' : ['revpar', 'satisfaction', 'taux_occupation'],
+        'label'   : 'Standard (3+3) — min 18 hôtels',
+        'min_dmu' : 18,
+    },
+    'compact' : {
+        'inputs'  : ['nb_employes', 'couts_op_ex'],
+        'outputs' : ['revpar', 'satisfaction'],
+        'label'   : 'Compact (2+2) — min 12 hôtels',
+        'min_dmu' : 12,
+    },
+    'minimal' : {
+        'inputs'  : ['nb_employes', 'couts_op_ex'],
+        'outputs' : ['revpar'],
+        'label'   : 'Minimal (2+1) — min 9 hôtels',
+        'min_dmu' : 9,
+    },
+}
+
 QUADRANT_LABELS = {
     'Q1': '🏆 Efficient',
     'Q2': '⚙️ Problème Échelle',
@@ -57,7 +83,7 @@ class HotelDEAAnalyzer:
     Enrichi : TOPSIS · K-means · 4 Quadrants · Metafrontière · Capital & Flow Through
     """
 
-    def __init__(self, df: pd.DataFrame, orientation: str = 'input'):
+    def __init__(self, df: pd.DataFrame, orientation: str = 'input', mode: str = 'standard'):
         self.df          = df.copy()
         self.hotels      = df.index.tolist()
         self.n           = len(self.hotels)
@@ -71,8 +97,21 @@ class HotelDEAAnalyzer:
         self.has_stars   = 'classement_etoiles' in df.columns
         self.has_flow    = ('gop_n1' in df.columns and 'revenu_n1' in df.columns)
 
-        self.inputs  = df[INPUT_COLS].values.astype(float)
-        self.outputs = df[OUTPUT_COLS].values.astype(float)
+        # Mode micro-compset (Raab & Lichty 2002)
+        self.mode        = mode if mode in INPUT_MODES else 'standard'
+        _mode_cfg        = INPUT_MODES[self.mode]
+        self.input_cols  = [c for c in _mode_cfg['inputs']  if c in df.columns]
+        self.output_cols = [c for c in _mode_cfg['outputs'] if c in df.columns]
+        self.mode_label  = _mode_cfg['label']
+        self.min_dmu     = _mode_cfg['min_dmu']
+
+        # Avertissement ratio DMUs/variables
+        _n_vars = len(self.input_cols) + len(self.output_cols)
+        self._dmu_ratio_warning = self.n < 3 * _n_vars
+        self._dmu_ratio_info    = (f'{self.n} DMUs < 3×{_n_vars} = {3*_n_vars} [mode {self.mode}]')
+
+        self.inputs  = df[self.input_cols].values.astype(float)
+        self.outputs = df[self.output_cols].values.astype(float)
 
         self.bcc_scores      : Dict[str, float]            = {}
         self.ccr_scores      : Dict[str, float]            = {}
