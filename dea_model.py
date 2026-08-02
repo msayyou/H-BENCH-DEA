@@ -793,6 +793,106 @@ class HotelDEAAnalyzer:
         return pd.DataFrame(data).sort_values('TOPSIS moyen', ascending=False)
 
 
+
+    def compute_super_efficiency(self) -> pd.DataFrame:
+        """
+        Super-Efficience — Andersen & Petersen (1993).
+
+        Pour chaque DMU p : résoudre le LP BCC en excluant p du dataset de référence.
+        Les DMUs efficients (BCC = 1) obtiennent un score > 1 → discrimination possible.
+        Les DMUs inefficients gardent leur score BCC (inchangé par construction).
+
+        Score > 1 : l'hôtel pourrait augmenter ses inputs et rester sur la frontière.
+        Score = 3.5 : l'hôtel peut utiliser 3.5× ses inputs actuels et rester efficient.
+
+        Réf. : Andersen & Petersen (1993) Management Science 39(10), 1261–1264.
+        """
+        import pulp as _pulp
+        rows = []
+
+        for p_idx, hotel in enumerate(self.hotels):
+            bcc = self.bcc_scores.get(hotel, 0)
+
+            # Exclure DMU p du dataset de référence
+            ref_idx   = [i for i in range(self.n) if i != p_idx]
+            inp_ref   = self.inputs[ref_idx]
+            out_ref   = self.outputs[ref_idx]
+            n_ref     = len(ref_idx)
+
+            if n_ref == 0:
+                rows.append({'Hôtel': hotel, 'BCC': f'{bcc:.1%}',
+                             'Super-Efficience': 1.0, 'Δ vs BCC': '+0.000',
+                             'Lecture': '— Seul DMU'})
+                continue
+
+            # LP BCC Input-Oriented sans DMU p
+            if self.orientation == 'input':
+                model  = _pulp.LpProblem(f"SE_{p_idx}", _pulp.LpMinimize)
+                theta  = _pulp.LpVariable("theta", lowBound=0)
+                lam    = _pulp.LpVariable.dicts("lam", range(n_ref), lowBound=0)
+
+                model += theta
+
+                for j in range(self.inputs.shape[1]):
+                    model += (_pulp.lpSum(lam[k] * inp_ref[k, j] for k in range(n_ref))
+                              <= theta * self.inputs[p_idx, j])
+                for j in range(self.outputs.shape[1]):
+                    model += (_pulp.lpSum(lam[k] * out_ref[k, j] for k in range(n_ref))
+                              >= self.outputs[p_idx, j])
+                model += _pulp.lpSum(lam.values()) == 1  # VRS
+
+                model.solve(_pulp.PULP_CBC_CMD(msg=False))
+                se = _pulp.value(theta) if _pulp.LpStatus[model.status] == 'Optimal' else bcc
+
+            else:  # output-oriented
+                model  = _pulp.LpProblem(f"SE_{p_idx}", _pulp.LpMaximize)
+                phi    = _pulp.LpVariable("phi", lowBound=0)
+                lam    = _pulp.LpVariable.dicts("lam", range(n_ref), lowBound=0)
+
+                model += phi
+
+                for j in range(self.inputs.shape[1]):
+                    model += (_pulp.lpSum(lam[k] * inp_ref[k, j] for k in range(n_ref))
+                              <= self.inputs[p_idx, j])
+                for j in range(self.outputs.shape[1]):
+                    model += (_pulp.lpSum(lam[k] * out_ref[k, j] for k in range(n_ref))
+                              >= phi * self.outputs[p_idx, j])
+                model += _pulp.lpSum(lam.values()) == 1
+
+                model.solve(_pulp.PULP_CBC_CMD(msg=False))
+                phi_val = _pulp.value(phi) if _pulp.LpStatus[model.status] == 'Optimal' else 1.0
+                se = phi_val if phi_val else bcc
+
+            se = round(float(se or bcc), 4)
+            delta = round(se - bcc, 4)
+
+            # Lecture
+            if se >= 1.0:
+                if se >= 2.0:
+                    lecture = f"🏆 Leader robuste — peut doubler ses ressources et rester efficient"
+                elif se >= 1.5:
+                    lecture = f"🥇 Très robuste — marge de sécurité élevée"
+                elif se >= 1.1:
+                    lecture = f"✅ Robuste — efficient et confirmé"
+                else:
+                    lecture = f"🟡 Efficient mais fragile — faible marge"
+            else:
+                lecture = f"🔴 Inefficient — score BCC ({bcc:.1%})"
+
+            rows.append({
+                'Hôtel'           : hotel,
+                'BCC'             : f"{bcc:.1%}",
+                'Super-Efficience': se,
+                'Δ vs BCC'        : f"{delta:+.4f}",
+                'Lecture'         : lecture,
+            })
+
+        df_out = (pd.DataFrame(rows)
+                    .sort_values('Super-Efficience', ascending=False)
+                    .reset_index(drop=True))
+        df_out.insert(0, 'Rang SE', range(1, len(df_out) + 1))
+        return df_out
+
     def compute_cross_efficiency(self) -> tuple:
         """
         Cross-Efficience — Doyle & Green (1994) forme multiplicatrice.
