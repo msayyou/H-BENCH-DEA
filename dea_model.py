@@ -753,6 +753,110 @@ class HotelDEAAnalyzer:
                  'Hôtels': ', '.join(hotels_c)} for lbl, hotels_c in seen.items()]
         return pd.DataFrame(data).sort_values('TOPSIS moyen', ascending=False)
 
+
+    def compute_cross_efficiency(self) -> tuple:
+        """
+        Cross-Efficience — Doyle & Green (1994) forme multiplicatrice.
+
+        Chaque DMU j est évalué avec les poids optimaux de TOUS ses pairs.
+        Score CE_k = moyenne des évaluations de k par les poids de chaque j.
+
+        Retourne :
+            df_summary : DataFrame avec BCC, Cross-Efficience, Δ, Lecture par hôtel
+            ce_matrix  : matrice n×n des évaluations croisées (numpy array)
+
+        Réf. : Doyle & Green (1994) Omega 22(6) · Anderson & Peterson (2008)
+        """
+        import pulp as _pulp
+        n      = self.n
+        hotels = self.hotels
+        X      = self.inputs    # shape (n, n_inputs)
+        Y      = self.outputs   # shape (n, n_outputs)
+        n_in   = X.shape[1]
+        n_out  = Y.shape[1]
+        eps    = 1e-6
+
+        # Matrice CE : CE[p, k] = score de k évalué avec les poids de p
+        ce_matrix = np.zeros((n, n))
+
+        for p in range(n):
+            # Forme multiplicatrice — modèle CCR Output-Oriented
+            # max  Σ_r u_r * y_rp
+            # s.t. Σ_i v_i * x_ip = 1
+            #      Σ_r u_r * y_rj - Σ_i v_i * x_ij ≤ 0  ∀j
+            #      u_r, v_i ≥ ε
+            model = _pulp.LpProblem(f"CE_{p}", _pulp.LpMaximize)
+            u = [_pulp.LpVariable(f"u_{r}", lowBound=eps) for r in range(n_out)]
+            v = [_pulp.LpVariable(f"v_{i}", lowBound=eps) for i in range(n_in)]
+
+            # Objectif
+            model += _pulp.lpSum(u[r] * Y[p, r] for r in range(n_out))
+
+            # Normalisation inputs de p
+            model += (_pulp.lpSum(v[i] * X[p, i] for i in range(n_in)) == 1)
+
+            # Contraintes DMUs
+            for j in range(n):
+                model += (
+                    _pulp.lpSum(u[r] * Y[j, r] for r in range(n_out)) -
+                    _pulp.lpSum(v[i] * X[j, i] for i in range(n_in)) <= 0
+                )
+
+            model.solve(_pulp.PULP_CBC_CMD(msg=False))
+
+            if _pulp.LpStatus[model.status] == 'Optimal':
+                u_star = np.array([_pulp.value(u[r]) or eps for r in range(n_out)])
+                v_star = np.array([_pulp.value(v[i]) or eps for i in range(n_in)])
+
+                # Évaluer tous les DMUs avec les poids de p
+                for k in range(n):
+                    denom = np.dot(v_star, X[k])
+                    if denom > 0:
+                        ce_matrix[p, k] = np.dot(u_star, Y[k]) / denom
+                    else:
+                        ce_matrix[p, k] = 0.0
+            else:
+                # Si infaisable, utiliser le score BCC comme fallback
+                for k in range(n):
+                    ce_matrix[p, k] = self.bcc_scores.get(hotels[k], 0)
+
+        # Score CE moyen pour chaque hôtel (colonne = moyenne par k)
+        ce_scores = ce_matrix.mean(axis=0)
+
+        # Construire le DataFrame résumé
+        rows = []
+        for k, hotel in enumerate(hotels):
+            bcc = self.bcc_scores.get(hotel, 0)
+            ce  = round(float(ce_scores[k]), 4)
+            delta = round(ce - bcc, 4)
+
+            if bcc >= 0.999 and ce >= 0.85:
+                lecture = "✅ Robuste — efficient et confirmé par les pairs"
+            elif bcc >= 0.999 and ce < 0.75:
+                lecture = "⚠️ Fragile — efficient uniquement avec ses propres poids"
+            elif bcc >= 0.999 and ce < 0.85:
+                lecture = "🟡 Efficient mais modérément robuste"
+            elif ce >= bcc - 0.05:
+                lecture = "🟢 Score stable — cohérent avec BCC"
+            else:
+                lecture = "🔴 Écart important — score BCC peu robuste"
+
+            rows.append({
+                'Rang CE'          : 0,
+                'Hôtel'            : hotel,
+                'BCC'              : f"{bcc:.1%}",
+                'Cross-Efficience' : ce,
+                'Δ BCC-CE'         : f"{delta:+.4f}",
+                'Lecture'          : lecture,
+            })
+
+        df_out = (pd.DataFrame(rows)
+                    .sort_values('Cross-Efficience', ascending=False)
+                    .reset_index(drop=True))
+        df_out['Rang CE'] = range(1, len(df_out) + 1)
+
+        return df_out, ce_matrix
+
     def get_topsis_ranking(self) -> pd.DataFrame:
         rows = [{'Rang': self.topsis_ranks[h], 'Hôtel': h, 'Score TOPSIS': self.topsis_scores[h],
                  'BCC': f"{self.bcc_scores[h]:.1%}", 'Eff. Échelle': f"{self.scale_efficiency[h]:.1%}",
