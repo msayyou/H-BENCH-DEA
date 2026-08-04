@@ -3077,7 +3077,7 @@ with tab9:
             flex_rows.append({
                 'Hôtel'          : hotel_ft,
                 'BCC'            : f"{dea.bcc_scores.get(hotel_ft,0):.1%}",
-                'Classement'     : '★' * stars_ft,
+                'Classement'     : '★' * int(cap_input.loc[hotel_ft,'classement (★)']) if 'classement (★)' in cap_input.columns else '—',
                 'Flow Through %' : f"{ft_val:.1%}" if isinstance(ft_val, float) else '--',
                 'Source'         : src,
                 'Qualite FT'     : ftq,
