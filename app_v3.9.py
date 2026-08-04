@@ -264,101 +264,489 @@ def generate_fiche_actif_pdf(
     return buf.getvalue()
 
 
-def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10) -> bytes:
-    """Rapport PDF portfolio : couverture + KPIs + distribution BCC + Top TOPSIS + Critiques."""
+def generate_portfolio_report_pdf(
+    dea,
+    quadrant_labels : dict,
+    top_n           : int   = 10,
+    avg_salary      : float = 35_000,
+    ft_pct          : float = 0.45,
+    revpar_value    : float = 1.0,
+    jours_exploit   : int   = 365,
+) -> bytes:
+    """
+    Rapport Portfolio PDF institutionnel — 7 pages.
+    Couverture · Synthèse exécutive · Analyse portefeuille (graphiques) ·
+    Répartition quadrants · Top TOPSIS · Plan d'action prioritaire · Références
+    """
     if not REPORTLAB_AVAILABLE:
         return b""
+
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             leftMargin=1.8*cm, rightMargin=1.8*cm,
                             topMargin=1.5*cm, bottomMargin=1.5*cm)
-    NAVY  = colors.HexColor("#1a3a5c"); BLUE  = colors.HexColor("#2e6da4")
-    RED   = colors.HexColor("#e74c3c"); LGRAY = colors.HexColor("#f5f5f5")
+
+    NAVY  = colors.HexColor("#1a3a5c")
+    BLUE  = colors.HexColor("#2e6da4")
+    GREEN = colors.HexColor("#1e8449")
+    RED   = colors.HexColor("#c0392b")
+    AMBER = colors.HexColor("#d4830a")
+    LGRAY = colors.HexColor("#f4f6f8")
     WHITE = colors.white
+
     styles = getSampleStyleSheet()
-    def S(name, **kw): return ParagraphStyle(name, parent=styles["Normal"], **kw)
-    cover_title = S("CT", fontSize=22, textColor=NAVY, fontName="Helvetica-Bold", alignment=TA_CENTER, spaceAfter=16)
-    cover_sub   = S("CS", fontSize=13, textColor=BLUE,  fontName="Helvetica",      alignment=TA_CENTER, spaceAfter=8)
-    h1_s  = S("H1", fontSize=13, textColor=NAVY, fontName="Helvetica-Bold", spaceBefore=12, spaceAfter=6)
-    h2_s  = S("H2", fontSize=10, textColor=NAVY, fontName="Helvetica-Bold", spaceBefore=8,  spaceAfter=4)
-    body_s= S("B",  fontSize=8,  textColor=colors.black, fontName="Helvetica")
-    small_s=S("SM", fontSize=7,  textColor=colors.grey,  fontName="Helvetica-Oblique")
+    def S(name, **kw):
+        return ParagraphStyle(name, parent=styles["Normal"], **kw)
+
+    TITLE   = S("T",  fontSize=26, textColor=WHITE,  fontName="Helvetica-Bold", alignment=TA_CENTER, leading=32)
+    STITLE  = S("ST", fontSize=14, textColor=colors.HexColor("#93c5fd"), fontName="Helvetica", alignment=TA_CENTER)
+    H1      = S("H1", fontSize=12, textColor=NAVY,   fontName="Helvetica-Bold", spaceBefore=14, spaceAfter=5,
+                borderPadding=(0,0,3,0))
+    H2      = S("H2", fontSize=10, textColor=BLUE,   fontName="Helvetica-Bold", spaceBefore=8,  spaceAfter=3)
+    BODY    = S("B",  fontSize=8,  textColor=colors.HexColor("#1e293b"), fontName="Helvetica", leading=12)
+    SMALL   = S("SM", fontSize=7,  textColor=colors.grey, fontName="Helvetica-Oblique")
+    VERDICT = S("VD", fontSize=9,  textColor=WHITE,   fontName="Helvetica-Bold", alignment=TA_CENTER,
+                borderPadding=8)
+
+    # ── Pré-calculs ──────────────────────────────────────────────────────────
+    avg_bcc    = sum(dea.bcc_scores.values()) / dea.n
+    avg_scale  = sum(dea.scale_efficiency.values()) / dea.n
+    n_eff      = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
+    n_crit     = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
+    n_watch    = sum(1 for s in dea.bcc_scores.values() if 0.85 <= s < 0.95)
+
+    qc = {}
+    for h in dea.hotels:
+        q = dea.quadrants.get(h, "Q4")
+        qc[q] = qc.get(q, 0) + 1
+
+    # Upside total portefeuille
+    up_fte = up_rev = up_gop = 0.0
+    for h in dea.hotels:
+        lits = float(dea.df.loc[h, "nb_lits"])
+        occ  = float(dea.df.loc[h, "taux_occupation"]) / 100
+        se   = dea.slacks.get(h, {}).get("inputs",  {}).get("nb_employes", 0)
+        sr   = dea.slacks.get(h, {}).get("outputs", {}).get("revpar", 0)
+        up_fte += se * avg_salary / 1000
+        up_rev += sr * lits * jours_exploit * occ * revpar_value / 1_000_000
+        up_gop += sr * lits * jours_exploit * occ * revpar_value * ft_pct / 1_000_000
+
+    # Verdict stratégique
+    q1, q2, q3, q4 = qc.get("Q1",0), qc.get("Q2",0), qc.get("Q3",0), qc.get("Q4",0)
+    if avg_bcc >= 0.90 and q1 >= dea.n * 0.55:
+        verdict_txt = "PORTEFEUILLE MATURE — Efficience élevée, stratégie de rétention et optimisation fine."
+        vcolor = GREEN
+    elif q3 >= dea.n * 0.40:
+        verdict_txt = "PROBLÈME DE GESTION DOMINANT — Actifs bien dimensionnés mais sous-exploités. Plan opérationnel prioritaire."
+        vcolor = AMBER
+    elif q4 >= dea.n * 0.30:
+        verdict_txt = "PORTEFEUILLE SOUS PRESSION — Nombre critique d'actifs en double inefficience. Arbitrage recommandé."
+        vcolor = RED
+    elif q2 >= dea.n * 0.40:
+        verdict_txt = "PROBLÈME D'ÉCHELLE STRUCTUREL — Gestion saine, taille inadaptée. Stratégie de croissance ou cession sélective."
+        vcolor = BLUE
+    else:
+        verdict_txt = f"PORTEFEUILLE MIXTE — {q1} Q1 · {q2} Q2 · {q3} Q3 · {q4} Q4. Approche différenciée recommandée."
+        vcolor = NAVY
 
     story = []
-    story.append(Spacer(1, 3*cm))
-    story.append(Paragraph("RAPPORT PORTFOLIO", cover_title))
-    story.append(Paragraph("Analyse DEA-H Multi-Dimensionnelle", cover_sub))
-    story.append(HRFlowable(width="60%", thickness=2, color=NAVY, spaceAfter=16))
-    story.append(Paragraph(f"{dea.n} hôtels analysés", cover_sub))
-    story.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", cover_sub))
-    story.append(Spacer(1, 1*cm))
-    story.append(Paragraph("REIV Hospitality · DEA-H v3.9", S("ft", fontSize=10, textColor=colors.grey, alignment=TA_CENTER)))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 1 — COUVERTURE
+    # ══════════════════════════════════════════════════════════════════════════
+    cover_bg = Table(
+        [[Paragraph("RAPPORT DE PORTEFEUILLE", TITLE)],
+         [Spacer(1, 0.4*cm)],
+         [Paragraph("Analyse DEA-H Multi-Dimensionnelle", STITLE)],
+         [Spacer(1, 0.6*cm)],
+         [HRFlowable(width="70%", thickness=1, color=colors.HexColor("#93c5fd"), spaceAfter=12)],
+         [Paragraph(f"{dea.n} hôtels analysés · {datetime.now().strftime('%d %B %Y')}", STITLE)],
+         [Spacer(1, 0.3*cm)],
+         [Paragraph("CONFIDENTIEL", S("CONF", fontSize=9, textColor=colors.HexColor("#f87171"),
+                                       fontName="Helvetica-Bold", alignment=TA_CENTER, letterSpacing=3))],
+         [Spacer(1, 1.5*cm)],
+         [Table([[
+             Table([[Paragraph(f"{avg_bcc:.0%}", S("KV", fontSize=28, textColor=WHITE, fontName="Helvetica-Bold", alignment=TA_CENTER))],
+                    [Paragraph("BCC MOYEN", S("KL", fontSize=7, textColor=colors.HexColor("#93c5fd"), fontName="Helvetica-Bold", alignment=TA_CENTER, letterSpacing=1))]],
+                   colWidths=[3.5*cm], rowHeights=[1*cm, 0.5*cm]),
+             Table([[Paragraph(f"{n_eff}", S("KV", fontSize=28, textColor=WHITE, fontName="Helvetica-Bold", alignment=TA_CENTER))],
+                    [Paragraph("EFFICIENTS", S("KL", fontSize=7, textColor=colors.HexColor("#93c5fd"), fontName="Helvetica-Bold", alignment=TA_CENTER, letterSpacing=1))]],
+                   colWidths=[3.5*cm], rowHeights=[1*cm, 0.5*cm]),
+             Table([[Paragraph(f"{n_crit}", S("KV2", fontSize=28, textColor=colors.HexColor("#fca5a5"), fontName="Helvetica-Bold", alignment=TA_CENTER))],
+                    [Paragraph("CRITIQUES", S("KL", fontSize=7, textColor=colors.HexColor("#93c5fd"), fontName="Helvetica-Bold", alignment=TA_CENTER, letterSpacing=1))]],
+                   colWidths=[3.5*cm], rowHeights=[1*cm, 0.5*cm]),
+         ]], colWidths=[3.5*cm, 3.5*cm, 3.5*cm])],
+         [Spacer(1, 2*cm)],
+         [Paragraph("REIV HOSPITALITY · Mehdi Sayyou · DEA-H v3.9",
+                    S("FT", fontSize=9, textColor=colors.HexColor("#64748b"), fontName="Helvetica", alignment=TA_CENTER))],
+        ],
+        colWidths=[16.4*cm],
+    )
+    cover_bg.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0), (-1,-1), NAVY),
+        ("TOPPADDING",  (0,0), (-1,-1), 30),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 30),
+        ("LEFTPADDING", (0,0), (-1,-1), 20),
+        ("RIGHTPADDING",(0,0), (-1,-1), 20),
+        ("BOX",         (0,0), (-1,-1), 0, NAVY),
+    ]))
+    story.append(Spacer(1, 0.5*cm))
+    story.append(cover_bg)
     story.append(PageBreak())
 
-    story.append(Paragraph("📊 Dashboard Portfolio", h1_s))
-    avg_bcc   = sum(dea.bcc_scores.values()) / len(dea.bcc_scores)
-    n_eff     = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
-    n_crit    = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
-    avg_scale = sum(dea.scale_efficiency.values()) / len(dea.scale_efficiency)
-    kpi_data  = [
-        ["KPI", "Valeur", "Interprétation"],
-        ["Efficacité BCC moyenne",          f"{avg_bcc:.1%}",   "Gestion pure du portefeuille"],
-        ["Hôtels efficaces (BCC ≥ 99.9%)", f"{n_eff}/{dea.n}", "Sur la frontière de best practice"],
-        ["Hôtels critiques (BCC < 85%)",    f"{n_crit}/{dea.n}","Plan d'action prioritaire"],
-        ["Efficacité d'échelle moyenne",   f"{avg_scale:.1%}", "Adéquation taille / marché"],
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 2 — SYNTHÈSE EXÉCUTIVE
+    # ══════════════════════════════════════════════════════════════════════════
+    story.append(Paragraph("1. SYNTHÈSE EXÉCUTIVE", H1))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=BLUE, spaceAfter=8))
+
+    # Verdict
+    verdict_table = Table([[Paragraph(verdict_txt, VERDICT)]],
+                           colWidths=[16.4*cm])
+    verdict_table.setStyle(TableStyle([
+        ("BACKGROUND",   (0,0),(-1,-1), vcolor),
+        ("TOPPADDING",   (0,0),(-1,-1), 10),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 10),
+        ("LEFTPADDING",  (0,0),(-1,-1), 12),
+        ("RIGHTPADDING", (0,0),(-1,-1), 12),
+        ("ROUNDEDCORNERS", (0,0),(-1,-1), 4),
+    ]))
+    story.append(verdict_table)
+    story.append(Spacer(1, 10))
+
+    # KPIs synthèse
+    kpi_rows = [
+        ["Indicateur", "Valeur", "Benchmark", "Signal"],
+        ["BCC moyen portefeuille",  f"{avg_bcc:.1%}",   "Seuil optimal : 90%",  "✅" if avg_bcc >= 0.90 else "⚠️"],
+        ["Scale Efficiency moy.",   f"{avg_scale:.1%}",  "Seuil optimal : 90%",  "✅" if avg_scale >= 0.90 else "⚠️"],
+        ["Hôtels sur la frontière", f"{n_eff}/{dea.n}",  f"Norme : 15-25% ({round(dea.n*0.18)}-{round(dea.n*0.25)})", "✅" if 0.12 <= n_eff/dea.n <= 0.35 else "⚠️"],
+        ["Hôtels critiques <85%",   f"{n_crit}/{dea.n}", "Objectif : 0",         "✅" if n_crit == 0 else "🔴"],
+        ["Hôtels à surveiller",     f"{n_watch}/{dea.n}", "85-95% BCC",          "🟡"],
     ]
-    kt = Table(kpi_data, colWidths=[5*cm, 3*cm, 6*cm])
-    kt.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),NAVY), ("TEXTCOLOR",(0,0),(-1,0),WHITE),
-        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),8),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LGRAY]),
-        ("GRID",(0,0),(-1,-1),0.3,colors.lightgrey),
+    kpi_t = Table(kpi_rows, colWidths=[5.5*cm, 2.5*cm, 4.5*cm, 2*cm])
+    kpi_t.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0),(-1,0), NAVY), ("TEXTCOLOR",(0,0),(-1,0), WHITE),
+        ("FONTNAME",    (0,0),(-1,0), "Helvetica-Bold"),
+        ("FONTSIZE",    (0,0),(-1,-1), 8),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [WHITE, LGRAY]),
+        ("GRID",        (0,0),(-1,-1), 0.3, colors.lightgrey),
+        ("VALIGN",      (0,0),(-1,-1), "MIDDLE"),
     ]))
-    story.append(kt); story.append(Spacer(1, 10))
+    story.append(kpi_t)
+    story.append(Spacer(1, 10))
 
-    story.append(Paragraph("🏆 Top Hôtels — Classement TOPSIS", h1_s))
-    top_data = [["Rang","Hôtel","Score TOPSIS","BCC","Scale Eff.","Quadrant"]]
-    for _, r in dea.get_topsis_ranking().head(top_n).iterrows():
-        h = r["Hôtel"]; q = dea.quadrants.get(h,"—")
-        top_data.append([f"#{int(r['Rang'])}", h[:22], f"{r['Score TOPSIS']:.3f}",
-                         f"{dea.bcc_scores.get(h,0):.1%}",
-                         f"{dea.scale_efficiency.get(h,0):.1%}",
-                         quadrant_labels.get(q,q)[:12]])
-    tt = Table(top_data, colWidths=[1.5*cm,5.5*cm,2.5*cm,1.8*cm,2*cm,2.5*cm])
-    tt.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),NAVY), ("TEXTCOLOR",(0,0),(-1,0),WHITE),
-        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),7.5),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LGRAY]),
-        ("GRID",(0,0),(-1,-1),0.3,colors.lightgrey),
+    # Upside financier
+    story.append(Paragraph("Upside Financier Identifié — Portefeuille Complet", H2))
+    up_rows = [
+        ["Levier", "Upside annuel estimé", "Méthodologie"],
+        ["💼 Masse salariale récupérable",  f"{up_fte:,.0f} k€/an",  f"Slack ETP × {avg_salary/1000:.0f}k€ coût moyen/ETP"],
+        ["🏨 Revenu additionnel (RevPAR)",  f"{up_rev:.2f} M€/an",   f"Slack RevPAR × capacité × {jours_exploit}j"],
+        ["💰 Upside GOP ajusté FT%",        f"{up_gop:.2f} M€/an",   f"Upside RevPAR × {ft_pct:.0%} Flow Through"],
+        ["📊 Upside Total (ETP + GOP)",     f"{up_fte/1000+up_gop:.2f} M€/an", "Somme des leviers identifiés par DEA"],
+    ]
+    up_t = Table(up_rows, colWidths=[5.5*cm, 3.5*cm, 6.5*cm])
+    up_t.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0),(-1,0), BLUE), ("TEXTCOLOR",(0,0),(-1,0), WHITE),
+        ("FONTNAME",    (0,0),(-1,0), "Helvetica-Bold"),
+        ("FONTNAME",    (0,4),(-1,4), "Helvetica-Bold"),
+        ("BACKGROUND",  (0,4),(-1,4), colors.HexColor("#dbeafe")),
+        ("FONTSIZE",    (0,0),(-1,-1), 8),
+        ("ROWBACKGROUNDS",(0,1),(-1,3), [WHITE, LGRAY]),
+        ("GRID",        (0,0),(-1,-1), 0.3, colors.lightgrey),
     ]))
-    story.append(tt); story.append(Spacer(1, 10))
+    story.append(up_t)
+    story.append(PageBreak())
 
-    story.append(Paragraph("🔴 Hôtels Critiques — Plan d'Action", h1_s))
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 3 — ANALYSE GRAPHIQUE
+    # ══════════════════════════════════════════════════════════════════════════
+    story.append(Paragraph("2. ANALYSE DU PORTEFEUILLE", H1))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=BLUE, spaceAfter=8))
+
+    if KALEIDO_AVAILABLE:
+        import plotly.graph_objects as go_p
+        import plotly.express as px_p
+
+        # Graphique 1 — Distribution BCC
+        bcc_vals = [dea.bcc_scores[h] for h in dea.hotels]
+        fig_h = go_p.Figure(go_p.Histogram(
+            x=bcc_vals, nbinsx=12, marker_color="#2e6da4", opacity=0.8,
+            xbins=dict(start=0, end=1.05, size=0.075)))
+        fig_h.add_vline(x=avg_bcc, line_dash="dash", line_color="red",
+                        annotation_text=f"Moy. {avg_bcc:.1%}", annotation_font_size=10)
+        fig_h.add_vline(x=0.85, line_dash="dot", line_color="orange",
+                        annotation_text="Seuil 85%", annotation_font_size=9)
+        fig_h.update_layout(
+            title=dict(text="Distribution des scores BCC", font=dict(size=12)),
+            xaxis=dict(title="Score BCC", tickformat=".0%"),
+            yaxis_title="Nombre d'hôtels",
+            height=360, width=760,
+            paper_bgcolor="white", plot_bgcolor="white",
+            margin=dict(l=50,r=30,t=50,b=50),
+            font=dict(size=10))
+        png1 = plotly_to_png_bytes(fig_h, width=760, height=360)
+        if png1:
+            story.append(Image(BytesIO(png1), width=16*cm, height=7.5*cm))
+            story.append(Spacer(1, 8))
+
+        # Graphique 2 — Carte Quadrants BCC × Scale
+        qcolors_map = {"Q1":"#1e8449","Q2":"#2e6da4","Q3":"#e67e22","Q4":"#c0392b"}
+        fig_q = go_p.Figure()
+        for h in dea.hotels:
+            q   = dea.quadrants.get(h, "Q4")
+            qlb = quadrant_labels.get(q, q)
+            fig_q.add_trace(go_p.Scatter(
+                x=[dea.scale_efficiency[h]], y=[dea.bcc_scores[h]],
+                mode="markers+text", text=[h[:14]],
+                textposition="top center", textfont=dict(size=7),
+                marker=dict(size=10, color=qcolors_map.get(q,"gray"),
+                            line=dict(color="white", width=1)),
+                name=qlb, showlegend=True,
+                hovertemplate=f"<b>{h}</b><br>BCC: {dea.bcc_scores[h]:.1%}<br>Scale: {dea.scale_efficiency[h]:.1%}<br>{qlb}<extra></extra>"))
+        fig_q.add_hline(y=0.90, line_dash="dot", line_color="#94a3b8", line_width=1)
+        fig_q.add_vline(x=0.90, line_dash="dot", line_color="#94a3b8", line_width=1)
+        # Étiquettes quadrants
+        for qn, ql, qx, qy in [("Q1","✅ Q1 Efficient","0.955","0.98"),("Q2","⚙️ Q2 Échelle","0.5","0.98"),
+                                  ("Q3","🧠 Q3 Gestion","0.955","0.60"),("Q4","🔴 Q4 Critique","0.5","0.60")]:
+            fig_q.add_annotation(x=float(qx), y=float(qy), text=f"<b>{ql}</b>",
+                                  showarrow=False, font=dict(size=8, color=qcolors_map.get(qn,"gray")),
+                                  xanchor="center")
+        fig_q.update_layout(
+            title=dict(text="Carte Stratégique — Quadrants BCC × Scale Efficiency", font=dict(size=12)),
+            xaxis=dict(title="Scale Efficiency", range=[0.45,1.08], tickformat=".0%"),
+            yaxis=dict(title="Score BCC",        range=[0.40,1.08], tickformat=".0%"),
+            height=380, width=760,
+            paper_bgcolor="white", plot_bgcolor="#fafafa",
+            margin=dict(l=50,r=30,t=50,b=50),
+            legend=dict(x=0.01, y=0.01, bgcolor="rgba(255,255,255,0.8)", bordercolor="#e2e8f0", borderwidth=1),
+            font=dict(size=10))
+        png2 = plotly_to_png_bytes(fig_q, width=760, height=380)
+        if png2:
+            story.append(Image(BytesIO(png2), width=16*cm, height=8*cm))
+
+    story.append(PageBreak())
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 4 — RÉPARTITION QUADRANTS + UPSIDE PAR ACTIF
+    # ══════════════════════════════════════════════════════════════════════════
+    story.append(Paragraph("3. RÉPARTITION STRATÉGIQUE & UPSIDE PAR ACTIF", H1))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=BLUE, spaceAfter=8))
+
+    # Tableau répartition quadrants
+    q_rows = [["Quadrant", "Nb hôtels", "%", "Diagnostic", "Levier principal"]]
+    q_defs = [
+        ("Q1","✅ Efficient","Conserver · Benchmark · Rétention"),
+        ("Q2","⚙️ Échelle","Analyser TGR · Croissance ou cession"),
+        ("Q3","🧠 Gestion","Plan opérationnel · Revoir management"),
+        ("Q4","🔴 Critique","Intervention urgente · Arbitrage"),
+    ]
+    for q, diag, levier in q_defs:
+        n_q = qc.get(q, 0)
+        q_rows.append([quadrant_labels.get(q, q), str(n_q), f"{n_q/dea.n:.0%}", diag, levier])
+    q_t = Table(q_rows, colWidths=[3.5*cm, 1.8*cm, 1.2*cm, 3.5*cm, 5.5*cm])
+    q_t.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0),(-1,0), NAVY), ("TEXTCOLOR",(0,0),(-1,0), WHITE),
+        ("FONTNAME",    (0,0),(-1,0), "Helvetica-Bold"),
+        ("FONTSIZE",    (0,0),(-1,-1), 8),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [WHITE,LGRAY]),
+        ("GRID",        (0,0),(-1,-1), 0.3, colors.lightgrey),
+        ("ALIGN",       (1,0),(2,-1), "CENTER"),
+    ]))
+    story.append(q_t)
+    story.append(Spacer(1, 10))
+
+    # Tableau upside par actif (tous les hôtels)
+    story.append(Paragraph("Upside Identifié par Actif — Plan de Priorisation", H2))
+    action_rows = [["Priorité", "Hôtel", "BCC", "Quadrant", "Slack ETP", "Upside ETP k€", "Slack RevPAR €", "Upside GOP M€", "Action"]]
+    sorted_hotels = sorted(dea.hotels, key=lambda h: dea.bcc_scores[h])
+    for h in sorted_hotels:
+        bcc_h  = dea.bcc_scores[h]
+        q_h    = dea.quadrants.get(h, "Q4")
+        se_h   = dea.slacks.get(h,{}).get("inputs",{}).get("nb_employes",0)
+        sr_h   = dea.slacks.get(h,{}).get("outputs",{}).get("revpar",0)
+        lits_h = float(dea.df.loc[h,"nb_lits"])
+        occ_h  = float(dea.df.loc[h,"taux_occupation"])/100
+        uf_h   = round(se_h * avg_salary / 1000)
+        ug_h   = round(sr_h * lits_h * jours_exploit * occ_h * revpar_value * ft_pct / 1_000_000, 2)
+
+        if bcc_h < 0.75:
+            prio = "🔴 URGENT"
+        elif bcc_h < 0.85:
+            prio = "🟠 ÉLEVÉE"
+        elif bcc_h < 0.95:
+            prio = "🟡 MODÉRÉE"
+        else:
+            prio = "✅ RAS"
+
+        action_map = {"Q1":"Benchmarker","Q2":"Voir TGR","Q3":"Plan opérationnel","Q4":"Comité urgent"}
+        action_rows.append([
+            prio, h[:18], f"{bcc_h:.1%}", q_h,
+            f"{se_h:.1f}" if se_h > 0.01 else "—",
+            f"{uf_h}" if uf_h > 0 else "—",
+            f"{sr_h:.1f}" if sr_h > 0.01 else "—",
+            f"{ug_h}" if ug_h > 0 else "—",
+            action_map.get(q_h, "—"),
+        ])
+
+    at = Table(action_rows, colWidths=[1.8*cm,3.4*cm,1.3*cm,1.3*cm,1.5*cm,1.8*cm,2*cm,1.8*cm,2*cm])
+    at.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0),(-1,0), NAVY), ("TEXTCOLOR",(0,0),(-1,0), WHITE),
+        ("FONTNAME",    (0,0),(-1,0), "Helvetica-Bold"),
+        ("FONTSIZE",    (0,0),(-1,-1), 6.5),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [WHITE,LGRAY]),
+        ("GRID",        (0,0),(-1,-1), 0.25, colors.lightgrey),
+        ("ALIGN",       (2,0),(-1,-1), "CENTER"),
+        ("VALIGN",      (0,0),(-1,-1), "MIDDLE"),
+    ]))
+    story.append(at)
+    story.append(PageBreak())
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 5 — TOP TOPSIS + CLASSEMENT COMPLET
+    # ══════════════════════════════════════════════════════════════════════════
+    story.append(Paragraph("4. CLASSEMENT TOPSIS — Multi-Critères Pondérés", H1))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=BLUE, spaceAfter=6))
+    story.append(Paragraph("Pondération : BCC 35% · Scale Efficiency 25% · RevPAR 25% · TO 15%", SMALL))
+    story.append(Spacer(1, 6))
+
+    topsis_rk = dea.get_topsis_ranking()
+    top_data  = [["#", "Hôtel", "Score Pi", "BCC", "Scale", "RevPAR", "TO", "Quadrant"]]
+    for _, r in topsis_rk.iterrows():
+        h = r["Hôtel"]
+        top_data.append([
+            f"#{int(r['Rang'])}", h[:22],
+            f"{r['Score TOPSIS']:.4f}",
+            f"{dea.bcc_scores.get(h,0):.1%}",
+            f"{dea.scale_efficiency.get(h,0):.1%}",
+            f"{float(dea.df.loc[h,'revpar']):.0f}€",
+            f"{float(dea.df.loc[h,'taux_occupation']):.0f}%",
+            dea.quadrants.get(h,"—"),
+        ])
+    top_t = Table(top_data, colWidths=[1.2*cm,4.5*cm,2*cm,1.8*cm,1.8*cm,2*cm,1.5*cm,1.8*cm])
+    top_t.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0),(-1,0), BLUE), ("TEXTCOLOR",(0,0),(-1,0), WHITE),
+        ("FONTNAME",    (0,0),(-1,0), "Helvetica-Bold"),
+        ("FONTSIZE",    (0,0),(-1,-1), 7.5),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [WHITE,LGRAY]),
+        ("GRID",        (0,0),(-1,-1), 0.25, colors.lightgrey),
+        ("ALIGN",       (2,0),(-1,-1), "CENTER"),
+        ("BACKGROUND",  (0,1),(0,3), colors.HexColor("#fef9c3")),   # top 3 highlight
+    ]))
+    story.append(top_t)
+
+    if KALEIDO_AVAILABLE:
+        topis_sorted = topsis_rk.sort_values("Score TOPSIS", ascending=True)
+        bar_colors   = ["#1e8449" if dea.bcc_scores.get(h,0)>=0.95
+                        else "#f39c12" if dea.bcc_scores.get(h,0)>=0.85
+                        else "#c0392b" for h in topis_sorted["Hôtel"]]
+        fig_tp = go_p.Figure(go_p.Bar(
+            x=topis_sorted["Score TOPSIS"], y=topis_sorted["Hôtel"],
+            orientation="h", marker_color=bar_colors, opacity=0.85,
+            text=[f"{v:.3f}" for v in topis_sorted["Score TOPSIS"]],
+            textposition="outside"))
+        fig_tp.update_layout(
+            title=dict(text="Classement TOPSIS — Score Pi", font=dict(size=11)),
+            xaxis=dict(title="Score Pi", range=[0,1.1], tickformat=".2f"),
+            height=max(350, dea.n*28), width=760,
+            paper_bgcolor="white", plot_bgcolor="#fafafa",
+            margin=dict(l=50,r=60,t=40,b=40), font=dict(size=9))
+        png3 = plotly_to_png_bytes(fig_tp, width=760, height=max(350, dea.n*28))
+        if png3:
+            story.append(Spacer(1, 8))
+            story.append(Image(BytesIO(png3), width=16*cm,
+                               height=min(max(7*cm, dea.n*0.28*cm), 13*cm)))
+
+    story.append(PageBreak())
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 6 — HÔTELS CRITIQUES — FICHES
+    # ══════════════════════════════════════════════════════════════════════════
     critical = [h for h in dea.hotels if dea.bcc_scores[h] < 0.85]
     if critical:
-        crit_data = [["Hôtel","BCC","Quadrant","Upside ETP (k€/an)"]]
-        for h in critical:
-            se  = dea.slacks.get(h,{}).get("inputs",{}).get("nb_employes",0)
-            uf  = round(se * 35000 / 1000)
-            crit_data.append([h[:22], f"{dea.bcc_scores[h]:.1%}",
-                               quadrant_labels.get(dea.quadrants.get(h,"—"),"—")[:14],
-                               str(uf) if uf > 0 else "—"])
-        ct = Table(crit_data, colWidths=[5.5*cm,2*cm,3.5*cm,3.5*cm])
-        ct.setStyle(TableStyle([
-            ("BACKGROUND",(0,0),(-1,0),RED), ("TEXTCOLOR",(0,0),(-1,0),WHITE),
-            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),7.5),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LGRAY]),
-            ("GRID",(0,0),(-1,-1),0.3,colors.lightgrey),
-        ]))
-        story.append(ct)
-    else:
-        story.append(Paragraph("✅ Aucun hôtel critique (BCC ≥ 85%).", body_s))
+        story.append(Paragraph("5. HÔTELS CRITIQUES — FICHES DE DIAGNOSTIC", H1))
+        story.append(HRFlowable(width="100%", thickness=1.5, color=RED, spaceAfter=8))
 
-    story.append(Spacer(1, 12))
+        for h in sorted(critical, key=lambda x: dea.bcc_scores[x]):
+            bcc_h  = dea.bcc_scores[h]
+            q_h    = dea.quadrants.get(h,"Q4")
+            se_h   = dea.slacks.get(h,{}).get("inputs",{}).get("nb_employes",0)
+            so_h   = dea.slacks.get(h,{}).get("inputs",{}).get("couts_op_ex",0)
+            sr_h   = dea.slacks.get(h,{}).get("outputs",{}).get("revpar",0)
+            lits_h = float(dea.df.loc[h,"nb_lits"])
+            occ_h  = float(dea.df.loc[h,"taux_occupation"])/100
+            uf_h   = round(se_h*avg_salary/1000)
+            ur_h   = round(sr_h*lits_h*jours_exploit*occ_h*revpar_value/1_000_000, 2)
+            ug_h   = round(ur_h * ft_pct, 2)
+            peers_h= list(dea.peers.get(h,{}).keys())[:3]
+
+            fiche = Table([
+                [Paragraph(f"🔴  {h}", S("FH", fontSize=10, textColor=WHITE, fontName="Helvetica-Bold")),
+                 Paragraph(f"BCC {bcc_h:.1%} · {quadrant_labels.get(q_h,q_h)}",
+                           S("FS", fontSize=8, textColor=colors.HexColor("#fca5a5"), fontName="Helvetica", alignment=TA_RIGHT))],
+                [Table([
+                    [Paragraph("Gaspillage identifié", S("SH", fontSize=8, textColor=BLUE, fontName="Helvetica-Bold")),
+                     Paragraph("Potentiel inexploité", S("SH2", fontSize=8, textColor=GREEN, fontName="Helvetica-Bold")),
+                     Paragraph("Pairs de référence", S("SH3", fontSize=8, textColor=NAVY, fontName="Helvetica-Bold"))],
+                    [Paragraph(f"ETP: {se_h:.1f} trop | Charges: {so_h:.2f} Me exc.",
+                               S("BL", fontSize=8, textColor=colors.black, fontName="Helvetica")),
+                     Paragraph(f"RevPAR upside: +{sr_h:.1f}e | GOP: +{ug_h:.2f} Me/an",
+                               S("BL2", fontSize=8, textColor=colors.black, fontName="Helvetica")),
+                     Paragraph(", ".join(p[:14] for p in peers_h) if peers_h else "—",
+                               S("BL3", fontSize=8, textColor=colors.black, fontName="Helvetica"))],
+                ], colWidths=[5.2*cm, 5.2*cm, 5.2*cm]),
+                 ""]
+            ], colWidths=[10*cm, 6*cm])
+            fiche.setStyle(TableStyle([
+                ("BACKGROUND",  (0,0),(-1,0), RED),
+                ("BACKGROUND",  (0,1),(-1,1), LGRAY),
+                ("TOPPADDING",  (0,0),(-1,-1), 6),
+                ("BOTTOMPADDING",(0,0),(-1,-1), 6),
+                ("LEFTPADDING", (0,0),(-1,-1), 8),
+                ("RIGHTPADDING",(0,0),(-1,-1), 8),
+                ("BOX",         (0,0),(-1,-1), 0.5, colors.lightgrey),
+            ]))
+            story.append(fiche)
+            story.append(Spacer(1, 6))
+
+        story.append(PageBreak())
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PAGE 7 — RÉFÉRENCES & FOOTER
+    # ══════════════════════════════════════════════════════════════════════════
+    story.append(Paragraph("6. RÉFÉRENCES MÉTHODOLOGIQUES", H1))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=BLUE, spaceAfter=8))
+
+    refs = [
+        ["Auteurs", "Contribution"],
+        ["Charnes, Cooper & Rhodes (1978)", "Modèle CCR fondateur · Efficience constante"],
+        ["Banker, Charnes & Cooper (1984)", "Modèle BCC · Rendements variables d'échelle"],
+        ["Barros (2005)", "DEA hôtelière · Format Radial+Slack+Projeté"],
+        ["Assaf, Barros & Josiassen (2010)", "Metafrontière bootstrappée · GTE/MTE/TGR"],
+        ["Yu (2012)", "MDEA Room/F&B · Mann-Whitney non-paramétrique"],
+        ["Hwang & Yoon (1981)", "TOPSIS · Classement multi-critères pondérés"],
+        ["Vlad, Toma & Fîntîneru (2026)", "TOPSIS composite · Entropie de Shannon (α=0.6)"],
+        ["Raab & Lichty (2002)", "Règle DMUs/variables · Seuil minimum compset"],
+        ["Simar & Wilson (2007)", "Tobit bootstrappé · Second stage DEA"],
+    ]
+    ref_t = Table(refs, colWidths=[6*cm, 10*cm])
+    ref_t.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0),(-1,0), NAVY), ("TEXTCOLOR",(0,0),(-1,0), WHITE),
+        ("FONTNAME",    (0,0),(-1,0), "Helvetica-Bold"),
+        ("FONTSIZE",    (0,0),(-1,-1), 7.5),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [WHITE,LGRAY]),
+        ("GRID",        (0,0),(-1,-1), 0.25, colors.lightgrey),
+    ]))
+    story.append(ref_t)
+    story.append(Spacer(1, 1*cm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
-    story.append(Paragraph("DEA-H v3.9 · REIV Hospitality · Confidentiel", small_s))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(
+        f"DEA-H v3.9 · REIV Hospitality · Mehdi Sayyou · Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')} · "
+        "Confidentiel — Usage interne asset manager", SMALL))
+
     doc.build(story)
     return buf.getvalue()
+
 
 
 # --- malmquist_tobit inline ---
@@ -1610,7 +1998,11 @@ with tab1:
         if st.button("📊 Générer", key="portfolio_pdf_btn", type="primary"):
             with st.spinner("Génération PDF..."):
                 try:
-                    _rp = generate_portfolio_report_pdf(dea=dea, quadrant_labels=QUADRANT_LABELS, top_n=top_n_portfolio)
+                    _rp = generate_portfolio_report_pdf(
+                        dea=dea, quadrant_labels=QUADRANT_LABELS, top_n=top_n_portfolio,
+                        avg_salary=avg_salary, ft_pct=ft_pct,
+                        revpar_value=revpar_value, jours_exploit=jours_exploit,
+                    )
                     if _rp:
                         st.session_state["portfolio_pdf"] = _rp
                         st.success(f"✅ {len(_rp)//1024} Ko")
