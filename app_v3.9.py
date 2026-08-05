@@ -116,8 +116,9 @@ def generate_fiche_actif_pdf(
     rvp   = float(raw["revpar"])
     sat   = float(raw["satisfaction"])
     occ   = float(raw["taux_occupation"])
-    nights = lits * jours_exploit * occ / 100
-    ca_est = rvp * lits * jours_exploit
+    _j_fiche = _get_jours(hotel, dea, jours_exploit)
+    nights = lits * _j_fiche * occ / 100
+    ca_est = rvp * lits * _j_fiche
 
     slk_emp = dea.slacks.get(hotel, {}).get("inputs", {}).get("nb_employes", 0)
     slk_rvp = dea.slacks.get(hotel, {}).get("outputs", {}).get("revpar", 0)
@@ -327,9 +328,10 @@ def generate_portfolio_report_pdf(
         occ  = float(dea.df.loc[h, "taux_occupation"]) / 100
         se   = dea.slacks.get(h, {}).get("inputs",  {}).get("nb_employes", 0)
         sr   = dea.slacks.get(h, {}).get("outputs", {}).get("revpar", 0)
+        _j_h    = _get_jours(h, dea, jours_exploit) if callable(_get_jours) else jours_exploit
         up_fte += se * avg_salary / 1000
-        up_rev += sr * lits * jours_exploit * occ * revpar_value / 1_000_000
-        up_gop += sr * lits * jours_exploit * occ * revpar_value * ft_pct / 1_000_000
+        up_rev += sr * lits * _j_h * occ * revpar_value / 1_000_000
+        up_gop += sr * lits * _j_h * occ * revpar_value * ft_pct / 1_000_000
 
     # Verdict stratégique
     q1, q2, q3, q4 = qc.get("Q1",0), qc.get("Q2",0), qc.get("Q3",0), qc.get("Q4",0)
@@ -567,7 +569,8 @@ def generate_portfolio_report_pdf(
         lits_h = float(dea.df.loc[h,"nb_lits"])
         occ_h  = float(dea.df.loc[h,"taux_occupation"])/100
         uf_h   = round(se_h * avg_salary / 1000)
-        ug_h   = round(sr_h * lits_h * jours_exploit * occ_h * revpar_value * ft_pct / 1_000_000, 2)
+        _j_c   = _get_jours(h, dea, jours_exploit)
+        ug_h   = round(sr_h * lits_h * _j_c * occ_h * revpar_value * ft_pct / 1_000_000, 2)
 
         if bcc_h < 0.75:
             prio = "🔴 URGENT"
@@ -675,7 +678,8 @@ def generate_portfolio_report_pdf(
             lits_h = float(dea.df.loc[h,"nb_lits"])
             occ_h  = float(dea.df.loc[h,"taux_occupation"])/100
             uf_h   = round(se_h*avg_salary/1000)
-            ur_h   = round(sr_h*lits_h*jours_exploit*occ_h*revpar_value/1_000_000, 2)
+            _j_ar  = _get_jours(h, dea, jours_exploit)
+            ur_h   = round(sr_h*lits_h*_j_ar*occ_h*revpar_value/1_000_000, 2)
             ug_h   = round(ur_h * ft_pct, 2)
             peers_h= list(dea.peers.get(h,{}).keys())[:3]
 
@@ -1592,6 +1596,18 @@ def load_sample() -> pd.DataFrame:
     }
     return pd.DataFrame(d).set_index('hotel_name')
 
+def _get_jours(hotel: str, dea, jours_default: int) -> int:
+    """Retourne les jours d exploitation de l hotel depuis le CSV si dispo, sinon sidebar."""
+    if getattr(dea, 'has_jours_exploit', False):
+        try:
+            v = int(float(dea.df.loc[hotel, 'jours_exploit']))
+            if 1 <= v <= 366:
+                return v
+        except (ValueError, TypeError):
+            pass
+    return jours_default
+
+
 if uploaded_file is not None:
     import io
     raw = uploaded_file.read().decode('utf-8', errors='replace')
@@ -1741,7 +1757,8 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         _n_vars = len(dea.input_cols) + len(dea.output_cols)
         dea._dmu_ratio_warning = dea.n < 3 * _n_vars
         dea._dmu_ratio_info    = f"{dea.n} DMUs < 3×{_n_vars} = {3*_n_vars} [mode {dea_mode}]"
-        dea.has_trevpar  = 'total_revenue'    in df.columns
+        dea.has_trevpar       = 'total_revenue'    in df.columns
+        dea.has_jours_exploit = 'jours_exploit'    in df.columns
         dea.has_surface  = 'surface_m2'       in df.columns
         dea.has_capex    = 'capex_annuel'     in df.columns
         dea.has_gop      = 'gop'              in df.columns
@@ -1885,9 +1902,10 @@ with tab1:
         _occ   = float(dea.df.loc[_h, 'taux_occupation']) / 100
         _se    = dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', 0)
         _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
+        _j_h = _get_jours(_h, dea, jours_exploit)
         _up_fte += _se * avg_salary / 1000
-        _up_rev += _sr * _lits * jours_exploit * _occ * revpar_value / 1_000_000
-        _up_gop += _sr * _lits * jours_exploit * _occ * revpar_value * ft_pct / 1_000_000
+        _up_rev += _sr * _lits * _j_h * _occ * revpar_value / 1_000_000
+        _up_gop += _sr * _lits * _j_h * _occ * revpar_value * ft_pct / 1_000_000
     st.markdown("---")
     _uc1, _uc2, _uc3 = st.columns(3)
     _uc1.metric("💼 Upside ETP total",      f"{_up_fte:,.0f} k€/an",  help="Réduction masse salariale si alignement sur frontière DEA")
