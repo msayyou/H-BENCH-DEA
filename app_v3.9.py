@@ -1172,6 +1172,50 @@ with tab2:
     )
     st.plotly_chart(fig_scatter, use_container_width=True)
 
+    # ── SBM — Score non-radial (Tone 2001) ───────────────────────────────────
+    st.markdown('<p class="section-title">📐 SBM — Score non-radial (Tone 2001)</p>', unsafe_allow_html=True)
+    st.caption(
+        "SBM (Slack-Based Measure) mesure l'inefficience directement via les slacks inputs ET outputs. "
+        "Contrairement à BCC/CCR (modèles radiaux), SBM gère nativement les GOP négatifs, "
+        "RevPAR nuls et variables d'environnement non-positives — idéal pour les actifs en difficulté "
+        "ou en repositionnement. ⚠️ Score NON comparable au score BCC. "
+        "Réf. : Tone (2001) EJOR ; Tone & Tsutsui (2010)."
+    )
+    if st.button("🔄 Calculer SBM (tous les hôtels)", key="sbm_btn_t2"):
+        with st.spinner("Calcul SBM en cours…"):
+            try:
+                _sbm_res = dea.compute_sbm()
+                st.session_state["sbm_results"] = _sbm_res
+                st.success(f"✅ SBM calculé — {len(_sbm_res)} DMUs")
+            except Exception as _e:
+                st.error(f"Erreur SBM : {_e}")
+
+    if st.session_state.get("sbm_results"):
+        _sbm = st.session_state["sbm_results"]
+        _sbm_rows = []
+        for h in dea.hotels:
+            _r = _sbm.get(h, {})
+            _score = _r.get('score')
+            _bcc   = dea.bcc_scores.get(h, 0)
+            _delta = round(_score - _bcc, 4) if _score is not None else None
+            _label = ('✅ SBM-efficient' if _score is not None and _score >= 0.999
+                      else '🟡 Inefficience modérée' if _score is not None and _score >= 0.80
+                      else '🔴 Inefficience forte' if _score is not None else '⚠️ Non résolu')
+            _sbm_rows.append({
+                'Hôtel'     : h,
+                'BCC'       : f"{_bcc:.1%}",
+                'SBM ρ*'    : f"{_score:.4f}" if _score is not None else '—',
+                'Δ SBM−BCC' : f"{_delta:+.4f}" if _delta is not None else '—',
+                'Signal'    : _label,
+            })
+        st.dataframe(pd.DataFrame(_sbm_rows), use_container_width=True, hide_index=True)
+        st.info(
+            "**SBM < BCC** : l'hôtel présente des inefficiences sur des dimensions "
+            "non capturées par le modèle radial BCC — vérifier les slacks détaillés dans "
+            "la **Fiche Actif (Tab 7)**. "
+            "**SBM ≈ BCC** : les deux modèles convergent — résultat robuste."
+        )
+
 # ══════════════════════════════════════════════
 # TAB 3 — CLASSEMENT TOPSIS
 # ══════════════════════════════════════════════
@@ -1726,6 +1770,69 @@ with tab7:
         height=420, paper_bgcolor='rgba(0,0,0,0)',
     )
     st.plotly_chart(fig_pos, use_container_width=True)
+
+    # ── SBM — Analyse non-radiale Fiche Actif ────────────────────────────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">📐 SBM — Analyse non-radiale (Tone 2001)</p>', unsafe_allow_html=True)
+    st.caption(
+        "SBM mesure l'inefficience via les slacks directement — sans contraction radiale. "
+        "Recommandé pour les actifs avec données non-positives (GOP < 0, RevPAR nul). "
+        "Score NON comparable au BCC."
+    )
+
+    _sbm_hotel = st.session_state.get("sbm_results", {}).get(selected)
+    if _sbm_hotel is None:
+        st.info("Cliquer **Calculer SBM** dans l'onglet 2 pour activer cette section.")
+    else:
+        _sbm_score = _sbm_hotel.get('score')
+        _bcc_score = dea.bcc_scores.get(selected, 0)
+
+        # Métriques comparatives BCC vs SBM
+        _sc1, _sc2, _sc3 = st.columns(3)
+        _sc1.metric("Score BCC (radial)",   f"{_bcc_score:.1%}")
+        _sc2.metric("Score SBM ρ* (non-radial)", f"{_sbm_score:.4f}" if _sbm_score else "—",
+                    delta=f"{(_sbm_score - _bcc_score):+.4f}" if _sbm_score else None)
+        _gap = abs(_sbm_score - _bcc_score) if _sbm_score else None
+        _sc3.metric("Écart |SBM − BCC|", f"{_gap:.4f}" if _gap is not None else "—",
+                    help="Écart > 0.05 : inefficiences non-radiales significatives à investiguer")
+
+        if _sbm_score is not None and _gap is not None:
+            if _gap > 0.10:
+                st.warning(
+                    f"⚠️ Écart SBM−BCC = {_gap:.4f} — inefficiences non-radiales importantes. "
+                    "L'hôtel présente des gaspillages sur des dimensions spécifiques non capturées "
+                    "par le modèle radial. Analyser les slacks ci-dessous."
+                )
+            elif _gap > 0.05:
+                st.info(f"ℹ️ Écart modéré ({_gap:.4f}) — vérifier les slacks pour identifier les leviers.")
+            else:
+                st.success(f"✅ BCC et SBM convergent (écart {_gap:.4f}) — résultat robuste.")
+
+        # Slacks SBM détaillés
+        _si = _sbm_hotel.get('slacks_in', {})
+        _so = _sbm_hotel.get('slacks_out', {})
+        if _si or _so:
+            st.markdown("**Slacks SBM — Gaspillages résiduels**")
+            _slack_rows = (
+                [{'Dimension': k, 'Type': 'Input ↓', 'Slack SBM': f"{v:.4f}" if v else '0'}
+                 for k, v in _si.items()]
+                + [{'Dimension': k, 'Type': 'Output ↑', 'Slack SBM': f"{v:.4f}" if v else '0'}
+                   for k, v in _so.items()]
+            )
+            st.dataframe(pd.DataFrame(_slack_rows), use_container_width=True, hide_index=True)
+
+        # Signal données non-positives
+        _has_neg = any(
+            dea.df.loc[selected, c] <= 0
+            for c in dea.input_cols + dea.output_cols
+            if c in dea.df.columns
+        )
+        if _has_neg:
+            st.info(
+                "🔢 Données non-positives détectées sur cet actif — "
+                "le score SBM est calculé via range normalization (Tone & Tsutsui 2010) "
+                "et reste valide. Le score BCC a également bénéficié de la translation invariance Pastor (1996)."
+            )
 
     # Export PDF Fiche Actif (P1.1)
     st.markdown("---")
