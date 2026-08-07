@@ -104,19 +104,30 @@ def compute_malmquist(dea) -> pd.DataFrame | None:
         frontier_shift = round(np.sqrt((d01 / d11) * (d00 / d10)), 4)
         tfp            = round(catchup * frontier_shift, 4)
 
-        # Interprétation
-        if tfp > 1.0 and catchup > 1.0 and frontier_shift > 1.0:
-            interp = '🟢 Progrès total — gestion ET technologie'
-        elif tfp > 1.0 and catchup >= 1.0:
-            interp = '🟢 Progrès — rattrapage de la frontière'
-        elif tfp > 1.0 and frontier_shift > 1.0:
-            interp = '🔵 Progrès sectoriel — hôtel suit la marée montante'
-        elif tfp < 1.0 and catchup < 1.0 and frontier_shift < 1.0:
-            interp = '🔴 Régression totale — gestion ET technologie en recul'
-        elif tfp < 1.0 and catchup < 1.0:
-            interp = '🟠 Régression gestion — s\'éloigne de la frontière'
+        # ── Interprétation — 5 cas Alpha vs Marée montante ──────────────────
+        # Réf. : DEA-H v3.9 Documentation — Section "Alpha vs Marée montante"
+        #        Caves et al. (1982) ; Färe et al. (1994)
+        #
+        # Alpha total   : CU > 1 ET FS > 1 → progrès gestion + secteur
+        # Alpha pur     : CU > 1 ET FS ≤ 1 → l'hôtel progresse contre la tendance
+        # Marée montante: CU ≤ 1 ET FS > 1 ET TFP > 1 → porté par le secteur
+        # Résistance    : CU ≤ 1 ET FS > 1 ET TFP ≤ 1 → secteur monte mais hôtel recule
+        # Régression    : CU ≤ 1 ET FS ≤ 1 → double recul
+        if catchup > 1.0 and frontier_shift > 1.0:
+            interp    = '🟢 Alpha total — progrès gestion + progrès sectoriel (TFP porté par les deux)'
+            alpha_cat = 'Alpha total'
+        elif catchup > 1.0 and frontier_shift <= 1.0:
+            interp    = '🏆 Alpha pur — hôtel progresse malgré frontière stable/régressante (mérite pur)'
+            alpha_cat = 'Alpha pur'
+        elif catchup <= 1.0 and frontier_shift > 1.0 and tfp > 1.0:
+            interp    = '🔵 Marée montante — TFP > 1 grâce au secteur, pas à la gestion propre'
+            alpha_cat = 'Marée montante'
+        elif catchup <= 1.0 and frontier_shift > 1.0 and tfp <= 1.0:
+            interp    = '🟠 Résistance — secteur progresse mais efficience de l\'hôtel en recul'
+            alpha_cat = 'Résistance'
         else:
-            interp = '🟡 Stable ou mixte'
+            interp    = '🔴 Régression — gestion ET technologie sectorielle en recul'
+            alpha_cat = 'Régression'
 
         rows.append({
             'Hôtel'          : hotel,
@@ -125,6 +136,7 @@ def compute_malmquist(dea) -> pd.DataFrame | None:
             'Catch-up'       : f'{catchup:.3f}',
             'Frontier Shift' : f'{frontier_shift:.3f}',
             'Malmquist TFP'  : f'{tfp:.3f}',
+            'Catégorie'      : alpha_cat,
             'Interprétation' : interp,
         })
 
