@@ -1075,6 +1075,72 @@ class HotelDEAAnalyzer:
                          'Rendement CAPEX': cap.get('rendement_capex'), 'GOPPAM (€/m²)': cap.get('goppam')})
         return pd.DataFrame(rows).sort_values('DEA Capital', ascending=False)
 
+    def compute_sbm(self) -> Dict[str, Dict]:
+        """
+        SBM non-orienté VRS — Tone (2001) EJOR 130:498-509.
+        Range normalization pour données non-positives : Tone & Tsutsui (2010).
+        Charnes-Cooper linearization de l'objectif fractionnaire.
+
+        Score ρ* ∈ [0,1] — NON comparable aux scores BCC/CCR radials.
+        ρ* = 1  ↔  DMU SBM-efficiente (aucun slack améliorable).
+        ρ* < 1  ↔  inefficience mesurée sur inputs ET outputs simultanément.
+        """
+        n = len(self.hotels)
+        m = self.inputs.shape[1]
+        s = self.outputs.shape[1]
+
+        # Range par variable — gère les zéros et négatifs (Tone & Tsutsui 2010)
+        x_range = np.ptp(self.inputs,  axis=0).astype(float)
+        y_range = np.ptp(self.outputs, axis=0).astype(float)
+        x_range = np.where(x_range < 1e-9, 1.0, x_range)
+        y_range = np.where(y_range < 1e-9, 1.0, y_range)
+
+        results: Dict[str, Dict] = {}
+        for idx, hotel in enumerate(self.hotels):
+            x0 = self.inputs[idx].astype(float)
+            y0 = self.outputs[idx].astype(float)
+
+            prob   = pulp.LpProblem(f"SBM_{idx}", pulp.LpMinimize)
+            t      = pulp.LpVariable("t",  lowBound=1e-8)
+            Lambda = [pulp.LpVariable(f"L{j}", lowBound=0) for j in range(n)]
+            S_in   = [pulp.LpVariable(f"Si{i}", lowBound=0) for i in range(m)]
+            S_out  = [pulp.LpVariable(f"So{r}", lowBound=0) for r in range(s)]
+
+            # Objectif : τ = t − (1/m)Σ(Sᵢ⁻/rᵢ)
+            prob += t - (1.0 / m) * pulp.lpSum(S_in[i]  / x_range[i] for i in range(m))
+
+            # Normalisation : t + (1/s)Σ(Sᵣ⁺/rᵣ) = 1
+            prob += t + (1.0 / s) * pulp.lpSum(S_out[r] / y_range[r] for r in range(s)) == 1
+
+            # Inputs  : ΣΛⱼ·xᵢⱼ + Sᵢ⁻ = t·xᵢ₀
+            for i in range(m):
+                prob += (pulp.lpSum(Lambda[j] * float(self.inputs[j, i]) for j in range(n))
+                         + S_in[i] == t * x0[i])
+
+            # Outputs : ΣΛⱼ·yᵣⱼ − Sᵣ⁺ = t·yᵣ₀
+            for r in range(s):
+                prob += (pulp.lpSum(Lambda[j] * float(self.outputs[j, r]) for j in range(n))
+                         - S_out[r] == t * y0[r])
+
+            # VRS : ΣΛⱼ = t  (Charnes-Cooper de Σλ = 1)
+            prob += pulp.lpSum(Lambda) == t
+
+            prob.solve(pulp.PULP_CBC_CMD(msg=0))
+
+            if prob.status == 1:
+                t_val = pulp.value(t) or 1e-8
+                rho   = round(min(float(pulp.value(prob.objective)), 1.0), 4)
+                s_in  = {self.input_cols[i]:  round(float(pulp.value(S_in[i]))  / t_val, 4) for i in range(m)}
+                s_out = {self.output_cols[r]: round(float(pulp.value(S_out[r])) / t_val, 4) for r in range(s)}
+            else:
+                rho   = None
+                s_in  = {c: None for c in self.input_cols}
+                s_out = {c: None for c in self.output_cols}
+
+            results[hotel] = {'score': rho, 'slacks_in': s_in, 'slacks_out': s_out,
+                               'feasible': prob.status == 1}
+        return results
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PARTIE 2 — Multi-Module DEA  (scipy/HiGHS)
