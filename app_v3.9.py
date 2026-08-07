@@ -893,20 +893,7 @@ n_efficient  = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
 n_critical   = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
 avg_scale    = np.mean(list(dea.scale_efficiency.values()))
 
-c1, c2, c3, c4, c5 = st.columns(5)
-with c1:
-    st.metric("📊 Efficacité BCC moy.", f"{avg_bcc:.1%}")
-with c2:
-    st.metric("🏆 Hôtels efficaces",    f"{n_efficient}/{dea.n}")
-with c3:
-    st.metric("⚙️ Eff. Échelle moy.",   f"{avg_scale:.1%}")
-with c4:
-    st.metric("🔴 Critiques (<85%)",    n_critical)
-with c5:
-    best_topsis = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
-    st.metric("🥇 Leader TOPSIS",       best_topsis)
-
-st.markdown("---")
+best_topsis = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
 
 # ─────────────────────────────────────────────
 #  11 ONGLETS
@@ -1096,6 +1083,61 @@ with tab1:
                "Poldrugovac et al. (2016) Mahalanobis · Hwang & Yoon (1981) TOPSIS.*")
 
 
+# ── Recommandations SBM par variable ─────────────────────────────────────────
+_SBM_RECO = {
+    'nb_employes'       : "Optimiser ratio ETP/chambre — masse salariale au-dessus de la norme compset. Piste : réorganisation, polyvalence, externalisation.",
+    'couts_op_ex'       : "Coûts opérationnels excessifs — RevPAR/OpEx sous la norme. Réviser contrats fournisseurs, énergie, maintenance.",
+    'nb_lits'           : "Capacité installée sous-productive — TO insuffisant vs taille. Repositionnement ou reconfiguration des chambres à évaluer.",
+    'revpar'            : "Levier RevPAR identifié — yield management non optimisé. Comparer ADR et TO aux benchmarks du compset.",
+    'taux_occupation'   : "Taux d'occupation sous-optimal — renforcer distribution et action commerciale. Revoir mix canal et contrats corporate.",
+    'satisfaction_score': "Satisfaction sous le potentiel — impact pricing power et fidélisation. Plan d'action qualité de service prioritaire.",
+    'gop'               : "Marge GOP insuffisante — revoir structure de coûts ou repositionner l'offre tarifaire.",
+}
+_SBM_RECO_DEFAULT = "Analyser les données opérationnelles détaillées pour identifier le levier prioritaire."
+
+def _sbm_dominant_analysis(sbm_hotel: dict, dea, hotel: str) -> dict:
+    """
+    Identifie le slack SBM dominant (contribution normalisée max)
+    et retourne le levier + recommandation ciblée.
+    """
+    si = sbm_hotel.get('slacks_in',  {})
+    so = sbm_hotel.get('slacks_out', {})
+
+    # Normalisation par range — même logique que compute_sbm()
+    x_range = {col: float(dea.inputs[:, i].max() - dea.inputs[:, i].min())
+               for i, col in enumerate(dea.input_cols)}
+    y_range = {col: float(dea.outputs[:, r].max() - dea.outputs[:, r].min())
+               for r, col in enumerate(dea.output_cols)}
+
+    contributions = {}
+    for col, val in si.items():
+        if val is not None and x_range.get(col, 0) > 1e-9:
+            contributions[(col, 'Input ↓')] = val / x_range[col]
+    for col, val in so.items():
+        if val is not None and y_range.get(col, 0) > 1e-9:
+            contributions[(col, 'Output ↑')] = val / y_range[col]
+
+    if not contributions:
+        return {'col': '—', 'type': '—', 'contrib': 0, 'reco': _SBM_RECO_DEFAULT}
+
+    (dom_col, dom_type), dom_contrib = max(contributions.items(), key=lambda x: x[1])
+
+    # % amélioration possible
+    try:
+        cur_val = float(dea.df.loc[hotel, dom_col]) if dom_col in dea.df.columns else None
+        raw_slack = (si if dom_type == 'Input ↓' else so).get(dom_col, 0) or 0
+        pct = f"{raw_slack / abs(cur_val):.1%}" if cur_val and abs(cur_val) > 1e-6 else "N/A"
+    except Exception:
+        pct = "N/A"
+
+    return {
+        'col'    : dom_col,
+        'type'   : dom_type,
+        'contrib': round(dom_contrib, 4),
+        'pct'    : pct,
+        'reco'   : _SBM_RECO.get(dom_col, _SBM_RECO_DEFAULT),
+    }
+
 # TAB 2 — DASHBOARD KPIs
 # ══════════════════════════════════════════════
 with tab2:
@@ -1201,12 +1243,16 @@ with tab2:
             _label = ('✅ SBM-efficient' if _score is not None and _score >= 0.999
                       else '🟡 Inefficience modérée' if _score is not None and _score >= 0.80
                       else '🔴 Inefficience forte' if _score is not None else '⚠️ Non résolu')
+            _dom = _sbm_dominant_analysis(_r, dea, h) if _r.get('feasible') else {}
             _sbm_rows.append({
-                'Hôtel'     : h,
-                'BCC'       : f"{_bcc:.1%}",
-                'SBM ρ*'    : f"{_score:.4f}" if _score is not None else '—',
-                'Δ SBM−BCC' : f"{_delta:+.4f}" if _delta is not None else '—',
-                'Signal'    : _label,
+                'Hôtel'          : h,
+                'BCC'            : f"{_bcc:.1%}",
+                'SBM ρ*'         : f"{_score:.4f}" if _score is not None else '—',
+                'Δ SBM−BCC'      : f"{_delta:+.4f}" if _delta is not None else '—',
+                'Signal'         : _label,
+                'Levier dominant': _dom.get('col', '—'),
+                'Type'           : _dom.get('type', '—'),
+                '% amélioration' : _dom.get('pct', '—'),
             })
         st.dataframe(pd.DataFrame(_sbm_rows), use_container_width=True, hide_index=True)
         st.info(
@@ -1808,11 +1854,45 @@ with tab7:
             else:
                 st.success(f"✅ BCC et SBM convergent (écart {_gap:.4f}) — résultat robuste.")
 
+        # ── Analyse automatique — Levier dominant ───────────────────────────
+        if _sbm_hotel.get('feasible') and _sbm_score is not None and _sbm_score < 0.999:
+            _dom = _sbm_dominant_analysis(_sbm_hotel, dea, selected)
+            st.markdown("---")
+            st.markdown("**🎯 Levier prioritaire identifié par SBM**")
+            _dl1, _dl2, _dl3 = st.columns(3)
+            _dl1.metric("Variable dominante", _dom['col'])
+            _dl2.metric("Direction",          _dom['type'])
+            _dl3.metric("Amélioration possible", _dom['pct'])
+            st.info(f"💡 **Recommandation :** {_dom['reco']}")
+
+            # Confrontation BCC vs SBM sur le levier dominant
+            _dom_col = _dom['col']
+            if _dom_col in dea.slacks.get(selected, {}).get('inputs', {}):
+                _bcc_slack = dea.slacks[selected]['inputs'].get(_dom_col, 0)
+                _sbm_slack = _sbm_hotel['slacks_in'].get(_dom_col, 0)
+                if _bcc_slack is not None and _sbm_slack is not None:
+                    st.markdown(
+                        f"**BCC slack `{_dom_col}` = {_bcc_slack:.4f}** vs "
+                        f"**SBM slack = {_sbm_slack:.4f}** — "
+                        + ("SBM détecte un gaspillage supplémentaire non-radial." if _sbm_slack > _bcc_slack
+                           else "Les deux modèles convergent sur ce levier.")
+                    )
+            elif _dom_col in dea.slacks.get(selected, {}).get('outputs', {}):
+                _bcc_slack = dea.slacks[selected]['outputs'].get(_dom_col, 0)
+                _sbm_slack = _sbm_hotel['slacks_out'].get(_dom_col, 0)
+                if _bcc_slack is not None and _sbm_slack is not None:
+                    st.markdown(
+                        f"**BCC slack `{_dom_col}` = {_bcc_slack:.4f}** vs "
+                        f"**SBM slack = {_sbm_slack:.4f}** — "
+                        + ("SBM détecte un potentiel d'output supérieur." if _sbm_slack > _bcc_slack
+                           else "Les deux modèles convergent sur ce levier.")
+                    )
+
         # Slacks SBM détaillés
         _si = _sbm_hotel.get('slacks_in', {})
         _so = _sbm_hotel.get('slacks_out', {})
         if _si or _so:
-            st.markdown("**Slacks SBM — Gaspillages résiduels**")
+            st.markdown("**Slacks SBM — Gaspillages résiduels (toutes dimensions)**")
             _slack_rows = (
                 [{'Dimension': k, 'Type': 'Input ↓', 'Slack SBM': f"{v:.4f}" if v else '0'}
                  for k, v in _si.items()]
