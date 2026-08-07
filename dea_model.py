@@ -1,5 +1,5 @@
 """
-dea_model.py — DEA-H v3.2
+dea_model.py — DEA-H v3.9
 ═══════════════════════════════════════════════════════════════════════════════
 Moteur DEA unifié — REIV Hospitality
 
@@ -37,10 +37,30 @@ warnings.filterwarnings('ignore')
 INPUT_COLS  = ['nb_lits', 'nb_employes', 'couts_op_ex']
 OUTPUT_COLS = ['revpar', 'satisfaction', 'taux_occupation']
 
+# ── Modes Micro-compset (Raab & Lichty 2002) ─────────────────────────────────
+# Quand n_DMUs < 3×(n_inputs+n_outputs), réduire les variables
+# Mode standard  : 3 inputs + 3 outputs → min 18 hôtels
+# Mode compact   : 2 inputs + 2 outputs → min 12 hôtels
+# Mode minimal   : 2 inputs + 1 output  → min  9 hôtels
 INPUT_MODES = {
-    'standard': {'inputs': INPUT_COLS,                          'outputs': OUTPUT_COLS,                    'label': 'Standard (3+3) - min 18', 'min_dmu': 18},
-    'compact' : {'inputs': ['nb_employes', 'couts_op_ex'],      'outputs': ['revpar', 'satisfaction'],     'label': 'Compact (2+2) - min 12',  'min_dmu': 12},
-    'minimal' : {'inputs': ['nb_employes', 'couts_op_ex'],      'outputs': ['revpar'],                     'label': 'Minimal (2+1) - min 9',   'min_dmu':  9},
+    'standard' : {
+        'inputs'  : ['nb_lits', 'nb_employes', 'couts_op_ex'],
+        'outputs' : ['revpar', 'satisfaction', 'taux_occupation'],
+        'label'   : 'Standard (3+3) — min 18 hôtels',
+        'min_dmu' : 18,
+    },
+    'compact' : {
+        'inputs'  : ['nb_employes', 'couts_op_ex'],
+        'outputs' : ['revpar', 'satisfaction'],
+        'label'   : 'Compact (2+2) — min 12 hôtels',
+        'min_dmu' : 12,
+    },
+    'minimal' : {
+        'inputs'  : ['nb_employes', 'couts_op_ex'],
+        'outputs' : ['revpar'],
+        'label'   : 'Minimal (2+1) — min 9 hôtels',
+        'min_dmu' : 9,
+    },
 }
 
 QUADRANT_LABELS = {
@@ -84,12 +104,34 @@ class HotelDEAAnalyzer:
         self.output_cols = [c for c in _mode_cfg['outputs'] if c in df.columns]
         self.mode_label  = _mode_cfg['label']
         self.min_dmu     = _mode_cfg['min_dmu']
+
+        # Avertissement ratio DMUs/variables
         _n_vars = len(self.input_cols) + len(self.output_cols)
         self._dmu_ratio_warning = self.n < 3 * _n_vars
-        self._dmu_ratio_info    = f"{self.n} DMUs < 3x{_n_vars} = {3*_n_vars} [mode {self.mode}]"
+        self._dmu_ratio_info    = (f'{self.n} DMUs < 3×{_n_vars} = {3*_n_vars} [mode {self.mode}]')
 
         self.inputs  = df[self.input_cols].values.astype(float)
         self.outputs = df[self.output_cols].values.astype(float)
+
+        # ── Translation invariance (Pastor 1996 EJOR) ────────────────────────
+        # BCC-VRS est invariant par translation (Pastor 1996).
+        # Si des valeurs ≤ 0 sont détectées, translation automatique +|min|+1
+        # pour maintenir la validité mathématique du LP (denominateurs > 0).
+        # Note : CCR n'est PAS invariant → avertissement si translation appliquée.
+        self._translation_applied_inputs  = False
+        self._translation_applied_outputs = False
+        self._translation_shift_in  = 0.0
+        self._translation_shift_out = 0.0
+        _min_in  = float(self.inputs.min())  if self.inputs.size  > 0 else 1.0
+        _min_out = float(self.outputs.min()) if self.outputs.size > 0 else 1.0
+        if _min_in <= 0:
+            self._translation_shift_in = abs(_min_in) + 1.0
+            self.inputs += self._translation_shift_in
+            self._translation_applied_inputs = True
+        if _min_out <= 0:
+            self._translation_shift_out = abs(_min_out) + 1.0
+            self.outputs += self._translation_shift_out
+            self._translation_applied_outputs = True
 
         self.bcc_scores      : Dict[str, float]            = {}
         self.ccr_scores      : Dict[str, float]            = {}
@@ -112,48 +154,6 @@ class HotelDEAAnalyzer:
     #  Orchestration
     # ─────────────────────────────────────────────
     def _run_analysis(self):
-        # ── Prorata jours d'exploitation (resort vs urban) ───────────────────
-        # Normalise nb_lits et nb_employes en équivalents annuels avant le DEA
-        # pour rendre comparables les resorts (195j) et hôtels urbains (365j).
-        # Les outputs (RevPAR, satisfaction, TO) = moyennes sur période → inchangés.
-        # Réf. : comparabilité DMUs, Banker et al. (1984).
-        self.prorata_applied = False
-        self._prorata_info   = {}
-        if 'jours_exploit' in self.df.columns:
-            try:
-                _j_arr = self.df['jours_exploit'].fillna(365).astype(float).values
-                if not all(abs(j - 365) < 1 for j in _j_arr):
-                    _prorata  = _j_arr / 365.0
-                    _inp_cols = getattr(self, 'input_cols', ['nb_lits', 'nb_employes', 'couts_op_ex'])
-                    for _ji, _col in enumerate(_inp_cols):
-                        if _col in ('nb_lits', 'nb_employes'):
-                            self.inputs[:, _ji] = self.inputs[:, _ji] * _prorata
-                    self.prorata_applied = True
-                    self._prorata_info = {
-                        self.hotels[i]: int(_j_arr[i])
-                        for i in range(self.n) if abs(_j_arr[i] - 365) >= 1
-                    }
-            except Exception:
-                pass
-
-        # ── Pastor (1996) : Translation invariance (valeurs ≤ 0) ─────────────
-        self.translation_applied: dict = {}
-        _eps = 1e-6
-        for _j in range(self.inputs.shape[1]):
-            _min = self.inputs[:, _j].min()
-            if _min <= 0:
-                _shift = abs(_min) + _eps
-                self.inputs[:, _j] += _shift
-                _names = ['nb_lits', 'nb_employes', 'couts_op_ex']
-                self.translation_applied[_names[_j] if _j < len(_names) else f'input_{_j}'] = round(_shift, 6)
-        for _j in range(self.outputs.shape[1]):
-            _min = self.outputs[:, _j].min()
-            if _min <= 0:
-                _shift = abs(_min) + _eps
-                self.outputs[:, _j] += _shift
-                _names = ['revpar', 'satisfaction', 'taux_occupation']
-                self.translation_applied[_names[_j] if _j < len(_names) else f'output_{_j}'] = round(_shift, 6)
-
         for i, hotel in enumerate(self.hotels):
             bcc_theta, bcc_lambdas = self._solve_dea(i, rts='vrs')
             ccr_theta, _           = self._solve_dea(i, rts='crs')
@@ -225,15 +225,17 @@ class HotelDEAAnalyzer:
         out_slacks = [max(0.0, sum(lambdas[k] * self.outputs[k, j] for k in range(self.n))
                           - self.outputs[idx, j])
                       for j in range(self.outputs.shape[1])]
+        # Utilise self.input_cols / self.output_cols (adapté au mode standard/compact/minimal)
+        # Réf. : Raab & Lichty (2002) — ne pas indexer INPUT_COLS hardcodé en mode réduit
         self.slacks[hotel] = {
-            'inputs' : {INPUT_COLS[j]: in_slacks[j]  for j in range(len(INPUT_COLS))},
-            'outputs': {OUTPUT_COLS[j]: out_slacks[j] for j in range(len(OUTPUT_COLS))},
+            'inputs' : {self.input_cols[j]: in_slacks[j]  for j in range(len(self.input_cols))},
+            'outputs': {self.output_cols[j]: out_slacks[j] for j in range(len(self.output_cols))},
         }
         self.targets[hotel] = {
-            'inputs' : {INPUT_COLS[j]: max(0.0, self.inputs[idx, j] * theta - in_slacks[j])
-                        for j in range(len(INPUT_COLS))},
-            'outputs': {OUTPUT_COLS[j]: self.outputs[idx, j] + out_slacks[j]
-                        for j in range(len(OUTPUT_COLS))},
+            'inputs' : {self.input_cols[j]: max(0.0, self.inputs[idx, j] * theta - in_slacks[j])
+                        for j in range(len(self.input_cols))},
+            'outputs': {self.output_cols[j]: self.outputs[idx, j] + out_slacks[j]
+                        for j in range(len(self.output_cols))},
         }
 
     # ─────────────────────────────────────────────
@@ -735,7 +737,8 @@ class HotelDEAAnalyzer:
     # ─────────────────────────────────────────────
     def get_barros_table(self, hotel: str) -> pd.DataFrame:
         rows = []; bcc = self.bcc_scores[hotel]
-        for col_name in INPUT_COLS:
+        # Utilise self.input_cols / self.output_cols (adapté au mode standard/compact/minimal)
+        for col_name in self.input_cols:
             current  = float(self.df.loc[hotel, col_name])
             target   = self.targets[hotel]['inputs'].get(col_name, current)
             slack_v  = self.slacks[hotel]['inputs'].get(col_name, 0)
@@ -745,7 +748,7 @@ class HotelDEAAnalyzer:
                          'Valeur Actuelle': round(current, 2), 'Mvt. Radial': round(radial, 2),
                          'Slack': round(slack_v, 2), 'Valeur Projetée': round(target, 2),
                          'Amélioration %': f"{(target - current) / current * 100:+.1f}%" if current > 0 else '—'})
-        for col_name in OUTPUT_COLS:
+        for col_name in self.output_cols:
             current  = float(self.df.loc[hotel, col_name])
             target   = self.targets[hotel]['outputs'].get(col_name, current)
             slack_v  = self.slacks[hotel]['outputs'].get(col_name, 0)
@@ -813,101 +816,208 @@ class HotelDEAAnalyzer:
         return pd.DataFrame(data).sort_values('TOPSIS moyen', ascending=False)
 
 
-    def compute_cross_efficiency(self) -> tuple:
-        """Cross-Efficience Doyle & Green (1994) — forme multiplicatrice CCR."""
+
+    def compute_super_efficiency(self) -> pd.DataFrame:
+        """
+        Super-Efficience — Andersen & Petersen (1993).
+
+        Pour chaque DMU p : résoudre le LP BCC en excluant p du dataset de référence.
+        Les DMUs efficients (BCC = 1) obtiennent un score > 1 → discrimination possible.
+        Les DMUs inefficients gardent leur score BCC (inchangé par construction).
+
+        Score > 1 : l'hôtel pourrait augmenter ses inputs et rester sur la frontière.
+        Score = 3.5 : l'hôtel peut utiliser 3.5× ses inputs actuels et rester efficient.
+
+        Réf. : Andersen & Petersen (1993) Management Science 39(10), 1261–1264.
+        """
         import pulp as _pulp
-        n = self.n; hotels = self.hotels
-        X = self.inputs; Y = self.outputs
-        n_in = X.shape[1]; n_out = Y.shape[1]; eps = 1e-6
+        rows = []
+
+        for p_idx, hotel in enumerate(self.hotels):
+            bcc = self.bcc_scores.get(hotel, 0)
+
+            # Exclure DMU p du dataset de référence
+            ref_idx   = [i for i in range(self.n) if i != p_idx]
+            inp_ref   = self.inputs[ref_idx]
+            out_ref   = self.outputs[ref_idx]
+            n_ref     = len(ref_idx)
+
+            if n_ref == 0:
+                rows.append({'Hôtel': hotel, 'BCC': f'{bcc:.1%}',
+                             'Super-Efficience': 1.0, 'Δ vs BCC': '+0.000',
+                             'Lecture': '— Seul DMU'})
+                continue
+
+            # LP BCC Input-Oriented sans DMU p
+            if self.orientation == 'input':
+                model  = _pulp.LpProblem(f"SE_{p_idx}", _pulp.LpMinimize)
+                theta  = _pulp.LpVariable("theta", lowBound=0)
+                lam    = _pulp.LpVariable.dicts("lam", range(n_ref), lowBound=0)
+
+                model += theta
+
+                for j in range(self.inputs.shape[1]):
+                    model += (_pulp.lpSum(lam[k] * inp_ref[k, j] for k in range(n_ref))
+                              <= theta * self.inputs[p_idx, j])
+                for j in range(self.outputs.shape[1]):
+                    model += (_pulp.lpSum(lam[k] * out_ref[k, j] for k in range(n_ref))
+                              >= self.outputs[p_idx, j])
+                model += _pulp.lpSum(lam.values()) == 1  # VRS
+
+                model.solve(_pulp.PULP_CBC_CMD(msg=False))
+                se = _pulp.value(theta) if _pulp.LpStatus[model.status] == 'Optimal' else bcc
+
+            else:  # output-oriented
+                model  = _pulp.LpProblem(f"SE_{p_idx}", _pulp.LpMaximize)
+                phi    = _pulp.LpVariable("phi", lowBound=0)
+                lam    = _pulp.LpVariable.dicts("lam", range(n_ref), lowBound=0)
+
+                model += phi
+
+                for j in range(self.inputs.shape[1]):
+                    model += (_pulp.lpSum(lam[k] * inp_ref[k, j] for k in range(n_ref))
+                              <= self.inputs[p_idx, j])
+                for j in range(self.outputs.shape[1]):
+                    model += (_pulp.lpSum(lam[k] * out_ref[k, j] for k in range(n_ref))
+                              >= phi * self.outputs[p_idx, j])
+                model += _pulp.lpSum(lam.values()) == 1
+
+                model.solve(_pulp.PULP_CBC_CMD(msg=False))
+                phi_val = _pulp.value(phi) if _pulp.LpStatus[model.status] == 'Optimal' else 1.0
+                se = phi_val if phi_val else bcc
+
+            se = round(float(se or bcc), 4)
+            delta = round(se - bcc, 4)
+
+            # Lecture
+            if se >= 1.0:
+                if se >= 2.0:
+                    lecture = f"🏆 Leader robuste — peut doubler ses ressources et rester efficient"
+                elif se >= 1.5:
+                    lecture = f"🥇 Très robuste — marge de sécurité élevée"
+                elif se >= 1.1:
+                    lecture = f"✅ Robuste — efficient et confirmé"
+                else:
+                    lecture = f"🟡 Efficient mais fragile — faible marge"
+            else:
+                lecture = f"🔴 Inefficient — score BCC ({bcc:.1%})"
+
+            rows.append({
+                'Hôtel'           : hotel,
+                'BCC'             : f"{bcc:.1%}",
+                'Super-Efficience': se,
+                'Δ vs BCC'        : f"{delta:+.4f}",
+                'Lecture'         : lecture,
+            })
+
+        df_out = (pd.DataFrame(rows)
+                    .sort_values('Super-Efficience', ascending=False)
+                    .reset_index(drop=True))
+        df_out.insert(0, 'Rang SE', range(1, len(df_out) + 1))
+        return df_out
+
+    def compute_cross_efficiency(self) -> tuple:
+        """
+        Cross-Efficience — Doyle & Green (1994) forme multiplicatrice.
+
+        Chaque DMU j est évalué avec les poids optimaux de TOUS ses pairs.
+        Score CE_k = moyenne des évaluations de k par les poids de chaque j.
+
+        Retourne :
+            df_summary : DataFrame avec BCC, Cross-Efficience, Δ, Lecture par hôtel
+            ce_matrix  : matrice n×n des évaluations croisées (numpy array)
+
+        Réf. : Doyle & Green (1994) Omega 22(6) · Anderson & Peterson (2008)
+        """
+        import pulp as _pulp
+        n      = self.n
+        hotels = self.hotels
+        X      = self.inputs    # shape (n, n_inputs)
+        Y      = self.outputs   # shape (n, n_outputs)
+        n_in   = X.shape[1]
+        n_out  = Y.shape[1]
+        eps    = 1e-6
+
+        # Matrice CE : CE[p, k] = score de k évalué avec les poids de p
         ce_matrix = np.zeros((n, n))
+
         for p in range(n):
+            # Forme multiplicatrice — modèle CCR Output-Oriented
+            # max  Σ_r u_r * y_rp
+            # s.t. Σ_i v_i * x_ip = 1
+            #      Σ_r u_r * y_rj - Σ_i v_i * x_ij ≤ 0  ∀j
+            #      u_r, v_i ≥ ε
             model = _pulp.LpProblem(f"CE_{p}", _pulp.LpMaximize)
             u = [_pulp.LpVariable(f"u_{r}", lowBound=eps) for r in range(n_out)]
             v = [_pulp.LpVariable(f"v_{i}", lowBound=eps) for i in range(n_in)]
-            model += _pulp.lpSum(u[r]*Y[p,r] for r in range(n_out))
-            model += (_pulp.lpSum(v[i]*X[p,i] for i in range(n_in)) == 1)
+
+            # Objectif
+            model += _pulp.lpSum(u[r] * Y[p, r] for r in range(n_out))
+
+            # Normalisation inputs de p
+            model += (_pulp.lpSum(v[i] * X[p, i] for i in range(n_in)) == 1)
+
+            # Contraintes DMUs
             for j in range(n):
-                model += (_pulp.lpSum(u[r]*Y[j,r] for r in range(n_out)) -
-                          _pulp.lpSum(v[i]*X[j,i] for i in range(n_in)) <= 0)
+                model += (
+                    _pulp.lpSum(u[r] * Y[j, r] for r in range(n_out)) -
+                    _pulp.lpSum(v[i] * X[j, i] for i in range(n_in)) <= 0
+                )
+
             model.solve(_pulp.PULP_CBC_CMD(msg=False))
+
             if _pulp.LpStatus[model.status] == 'Optimal':
-                u_s = np.array([_pulp.value(u[r]) or eps for r in range(n_out)])
-                v_s = np.array([_pulp.value(v[i]) or eps for i in range(n_in)])
+                u_star = np.array([_pulp.value(u[r]) or eps for r in range(n_out)])
+                v_star = np.array([_pulp.value(v[i]) or eps for i in range(n_in)])
+
+                # Évaluer tous les DMUs avec les poids de p
                 for k in range(n):
-                    d = np.dot(v_s, X[k])
-                    ce_matrix[p, k] = np.dot(u_s, Y[k]) / d if d > 0 else 0
+                    denom = np.dot(v_star, X[k])
+                    if denom > 0:
+                        ce_matrix[p, k] = np.dot(u_star, Y[k]) / denom
+                    else:
+                        ce_matrix[p, k] = 0.0
             else:
-                for k in range(n): ce_matrix[p, k] = self.bcc_scores.get(hotels[k], 0)
+                # Si infaisable, utiliser le score BCC comme fallback
+                for k in range(n):
+                    ce_matrix[p, k] = self.bcc_scores.get(hotels[k], 0)
+
+        # Score CE moyen pour chaque hôtel (colonne = moyenne par k)
         ce_scores = ce_matrix.mean(axis=0)
+
+        # Construire le DataFrame résumé
         rows = []
         for k, hotel in enumerate(hotels):
-            bcc = self.bcc_scores.get(hotel, 0); ce = round(float(ce_scores[k]), 4)
-            delta = round(ce - bcc, 4)
-            if bcc >= 0.999 and ce >= 0.85: lec = "✅ Robuste"
-            elif bcc >= 0.999 and ce < 0.75: lec = "⚠️ Fragile"
-            elif bcc >= 0.999: lec = "🟡 Efficient modérément robuste"
-            elif ce >= bcc - 0.05: lec = "🟢 Score stable"
-            else: lec = "🔴 Écart important"
-            rows.append({'Rang CE': 0, 'Hôtel': hotel, 'BCC': f"{bcc:.1%}",
-                         'Cross-Efficience': ce, 'Delta BCC-CE': f"{delta:+.4f}", 'Lecture': lec})
-        df_out = (pd.DataFrame(rows).sort_values('Cross-Efficience', ascending=False)
-                  .reset_index(drop=True))
-        df_out['Rang CE'] = range(1, len(df_out)+1)
-        return df_out, ce_matrix
-
-
-    def compute_super_efficiency(self) -> pd.DataFrame:
-        """Super-Efficience Andersen & Petersen (1993)."""
-        import pulp as _pulp
-        rows = []
-        for p_idx, hotel in enumerate(self.hotels):
             bcc = self.bcc_scores.get(hotel, 0)
-            ref_idx = [i for i in range(self.n) if i != p_idx]
-            inp_ref = self.inputs[ref_idx]; out_ref = self.outputs[ref_idx]; n_ref = len(ref_idx)
-            if n_ref == 0:
-                rows.append({'Rang SE': 0, 'Hôtel': hotel, 'BCC': f"{bcc:.1%}",
-                             'Super-Efficience': 1.0, 'Delta vs BCC': '+0.000', 'Lecture': '—'})
-                continue
-            if self.orientation == 'input':
-                model = _pulp.LpProblem(f"SE_{p_idx}", _pulp.LpMinimize)
-                theta = _pulp.LpVariable("theta", lowBound=0)
-                lam   = _pulp.LpVariable.dicts("lam", range(n_ref), lowBound=0)
-                model += theta
-                for j in range(self.inputs.shape[1]):
-                    model += (_pulp.lpSum(lam[k]*inp_ref[k,j] for k in range(n_ref))
-                              <= theta * self.inputs[p_idx,j])
-                for j in range(self.outputs.shape[1]):
-                    model += (_pulp.lpSum(lam[k]*out_ref[k,j] for k in range(n_ref))
-                              >= self.outputs[p_idx,j])
-                model += _pulp.lpSum(lam.values()) == 1
-                model.solve(_pulp.PULP_CBC_CMD(msg=False))
-                se = _pulp.value(theta) if _pulp.LpStatus[model.status]=='Optimal' else bcc
+            ce  = round(float(ce_scores[k]), 4)
+            delta = round(ce - bcc, 4)
+
+            if bcc >= 0.999 and ce >= 0.85:
+                lecture = "✅ Robuste — efficient et confirmé par les pairs"
+            elif bcc >= 0.999 and ce < 0.75:
+                lecture = "⚠️ Fragile — efficient uniquement avec ses propres poids"
+            elif bcc >= 0.999 and ce < 0.85:
+                lecture = "🟡 Efficient mais modérément robuste"
+            elif ce >= bcc - 0.05:
+                lecture = "🟢 Score stable — cohérent avec BCC"
             else:
-                model = _pulp.LpProblem(f"SE_{p_idx}", _pulp.LpMaximize)
-                phi = _pulp.LpVariable("phi", lowBound=0)
-                lam = _pulp.LpVariable.dicts("lam", range(n_ref), lowBound=0)
-                model += phi
-                for j in range(self.inputs.shape[1]):
-                    model += (_pulp.lpSum(lam[k]*inp_ref[k,j] for k in range(n_ref))
-                              <= self.inputs[p_idx,j])
-                for j in range(self.outputs.shape[1]):
-                    model += (_pulp.lpSum(lam[k]*out_ref[k,j] for k in range(n_ref))
-                              >= phi * self.outputs[p_idx,j])
-                model += _pulp.lpSum(lam.values()) == 1
-                model.solve(_pulp.PULP_CBC_CMD(msg=False))
-                se = (_pulp.value(phi) or bcc) if _pulp.LpStatus[model.status]=='Optimal' else bcc
-            se = round(float(se or bcc), 4); delta = round(se - bcc, 4)
-            if se >= 2.0: lec = "Leader robuste — peut doubler ses ressources"
-            elif se >= 1.5: lec = "Tres robuste — forte marge"
-            elif se >= 1.1: lec = "Robuste — efficient confirme"
-            elif se >= 1.0: lec = "Efficient fragile — faible marge"
-            else:           lec = f"Inefficient BCC ({bcc:.1%})"
-            rows.append({'Rang SE': 0, 'Hôtel': hotel, 'BCC': f"{bcc:.1%}",
-                         'Super-Efficience': se, 'Delta vs BCC': f"{delta:+.4f}", 'Lecture': lec})
-        df_out = (pd.DataFrame(rows).sort_values('Super-Efficience', ascending=False)
-                  .reset_index(drop=True))
-        df_out['Rang SE'] = range(1, len(df_out)+1)
-        return df_out
+                lecture = "🔴 Écart important — score BCC peu robuste"
+
+            rows.append({
+                'Rang CE'          : 0,
+                'Hôtel'            : hotel,
+                'BCC'              : f"{bcc:.1%}",
+                'Cross-Efficience' : ce,
+                'Δ BCC-CE'         : f"{delta:+.4f}",
+                'Lecture'          : lecture,
+            })
+
+        df_out = (pd.DataFrame(rows)
+                    .sort_values('Cross-Efficience', ascending=False)
+                    .reset_index(drop=True))
+        df_out['Rang CE'] = range(1, len(df_out) + 1)
+
+        return df_out, ce_matrix
 
     def get_topsis_ranking(self) -> pd.DataFrame:
         rows = [{'Rang': self.topsis_ranks[h], 'Hôtel': h, 'Score TOPSIS': self.topsis_scores[h],
