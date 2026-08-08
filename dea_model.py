@@ -1,5 +1,5 @@
 """
-dea_model.py — DEA-H v3.9
+dea_model.py — DEA-H v4
 ═══════════════════════════════════════════════════════════════════════════════
 Moteur DEA unifié — REIV Hospitality
 
@@ -1140,6 +1140,93 @@ class HotelDEAAnalyzer:
             results[hotel] = {'score': rho, 'slacks_in': s_in, 'slacks_out': s_out,
                                'feasible': prob.status == 1}
         return results
+
+    def compute_nondiscretionary_targets(
+        self,
+        hotel: str,
+        fixed_inputs: list,          # noms de colonnes verrouillées, ex. ['nb_lits']
+    ) -> Optional[Dict]:
+        """
+        DEA avec inputs non-discrétionnaires — Banker & Morey (1986) Mgmt Sci.
+        Les inputs dans `fixed_inputs` sont contraints à leur valeur actuelle (pas de θ).
+        θ est minimisé uniquement sur les inputs discrétionnaires.
+
+        Retourne :
+          - theta_nd   : score d'efficience contraint
+          - targets_disc : nouvelles cibles pour les inputs discrétionnaires
+          - targets_out  : cibles outputs (inchangées dans la logique)
+          - slacks_disc  : slacks résiduels inputs discrétionnaires
+          - infeasible   : True si aucune solution trouvée
+        """
+        if hotel not in self.hotels:
+            return None
+
+        idx = list(self.hotels).index(hotel)
+        n   = len(self.hotels)
+        x0  = self.inputs[idx]
+        y0  = self.outputs[idx]
+
+        disc_idx  = [i for i, c in enumerate(self.input_cols) if c not in fixed_inputs]
+        fixed_idx = [i for i, c in enumerate(self.input_cols) if c in fixed_inputs]
+
+        prob    = pulp.LpProblem(f"ND_DEA_{hotel}", pulp.LpMinimize)
+        theta   = pulp.LpVariable("theta", lowBound=0)
+        lambdas = pulp.LpVariable.dicts("lam", range(n), lowBound=0)
+
+        prob += theta
+
+        # Inputs discrétionnaires : Σλⱼxᵢⱼ ≤ θ·xᵢ₀
+        for i in disc_idx:
+            prob += pulp.lpSum(lambdas[j] * float(self.inputs[j, i]) for j in range(n)) <= theta * float(x0[i])
+
+        # Inputs non-discrétionnaires (fixes) : Σλⱼxᵢⱼ ≤ xᵢ₀  (sans θ)
+        for i in fixed_idx:
+            prob += pulp.lpSum(lambdas[j] * float(self.inputs[j, i]) for j in range(n)) <= float(x0[i])
+
+        # Outputs : Σλⱼyᵣⱼ ≥ yᵣ₀
+        for r in range(self.outputs.shape[1]):
+            prob += pulp.lpSum(lambdas[j] * float(self.outputs[j, r]) for j in range(n)) >= float(y0[r])
+
+        # VRS
+        prob += pulp.lpSum(lambdas.values()) == 1
+
+        prob.solve(pulp.PULP_CBC_CMD(msg=0))
+
+        if prob.status != 1:
+            return {'infeasible': True, 'hotel': hotel, 'fixed_inputs': fixed_inputs}
+
+        th = float(pulp.value(theta))
+
+        # Cibles discrétionnaires = θ · xᵢ₀ - slack_i
+        lam_vals = {j: float(pulp.value(lambdas[j])) for j in range(n)}
+        targets_disc = {}
+        slacks_disc  = {}
+        for i in disc_idx:
+            col      = self.input_cols[i]
+            proj     = sum(lam_vals[j] * float(self.inputs[j, i]) for j in range(n))
+            slack    = max(0.0, th * float(x0[i]) - proj)
+            target   = max(0.0, th * float(x0[i]) - slack)
+            targets_disc[col] = round(target, 4)
+            slacks_disc[col]  = round(slack,  4)
+
+        # Cibles outputs
+        targets_out = {}
+        for r in range(self.outputs.shape[1]):
+            col    = self.output_cols[r]
+            proj   = sum(lam_vals[j] * float(self.outputs[j, r]) for j in range(n))
+            target = max(float(y0[r]), proj)
+            targets_out[col] = round(target, 4)
+
+        return {
+            'infeasible'   : False,
+            'hotel'        : hotel,
+            'theta_nd'     : round(th, 4),
+            'fixed_inputs' : fixed_inputs,
+            'targets_disc' : targets_disc,
+            'slacks_disc'  : slacks_disc,
+            'targets_out'  : targets_out,
+            'current_vals' : {self.input_cols[i]: round(float(x0[i]), 4) for i in disc_idx},
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
