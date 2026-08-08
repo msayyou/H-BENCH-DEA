@@ -506,7 +506,7 @@ hr { border-color: #e2e8f0 !important; }
 # ─────────────────────────────────────────────
 st.markdown('<h1 class="main-header">DEA-H — Asset Manager Benchmarking</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Analyse BCC/CCR &middot; TOPSIS &middot; K-means &middot; Metafrontière &middot; Multi-Module DEA</p>', unsafe_allow_html=True)
-st.markdown('<div class="reiv-badge"><span>REIV Hospitality · v3.9</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="reiv-badge"><span>REIV Hospitality.v4</span></div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  Session state init (multi-module)
