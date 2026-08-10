@@ -2852,9 +2852,76 @@ with tab10:
     st.markdown('<p class="section-title">📊 Benchmark Marché — STR Indices & Quartiles</p>', unsafe_allow_html=True)
     st.caption(
         "Chaque hôtel a sa propre référence marché (marché local × catégorie). "
-        "Renseignez les valeurs STR correspondantes dans le tableau ci-dessous — "
-        "une ligne par hôtel, depuis vos rapports STR/HotStats respectifs."
+        "Importez votre fichier de benchmarks STR ou saisissez les valeurs directement dans le tableau."
     )
+
+    # ── Import CSV / Excel de benchmarks STR ──────────────────────────────────
+    with st.expander("📂 Importer un fichier de benchmarks STR (CSV ou Excel)", expanded=False):
+        st.caption(
+            "Colonnes attendues (ordre libre) : **Hôtel** · **Marché / Ville** · **Catégorie** · "
+            "**RevPAR marché €** · **ADR marché €** · **OCC marché %**  \n"
+            "La colonne *Hôtel* doit correspondre exactement aux noms dans votre CSV DEA-H."
+        )
+        _str_upload = st.file_uploader("Fichier benchmarks STR", type=["csv", "xlsx", "xls"], key="str_bm_upload")
+        if _str_upload is not None:
+            try:
+                if _str_upload.name.endswith((".xlsx", ".xls")):
+                    _up_df = pd.read_excel(_str_upload)
+                else:
+                    # Détecter séparateur (;  ou ,)
+                    _raw = _str_upload.read().decode("utf-8-sig")
+                    _sep = ";" if _raw.count(";") > _raw.count(",") else ","
+                    import io as _io
+                    _up_df = pd.read_csv(_io.StringIO(_raw), sep=_sep)
+
+                # Normaliser noms de colonnes
+                _col_map = {
+                    'hotel': 'Hôtel', 'hôtel': 'Hôtel',
+                    'marché / ville': 'Marché / Ville', 'marche / ville': 'Marché / Ville',
+                    'marché': 'Marché / Ville', 'ville': 'Marché / Ville',
+                    'catégorie': 'Catégorie', 'categorie': 'Catégorie',
+                    'revpar marché €': 'RevPAR marché €', 'revpar marche €': 'RevPAR marché €',
+                    'revpar marché': 'RevPAR marché €', 'revpar': 'RevPAR marché €',
+                    'adr marché €': 'ADR marché €', 'adr marche €': 'ADR marché €',
+                    'adr marché': 'ADR marché €', 'adr': 'ADR marché €',
+                    'occ marché %': 'OCC marché %', 'occ marche %': 'OCC marché %',
+                    'occ marché': 'OCC marché %', 'occ': 'OCC marché %',
+                }
+                _up_df.columns = [_col_map.get(c.strip().lower(), c.strip()) for c in _up_df.columns]
+
+                if 'Hôtel' not in _up_df.columns:
+                    st.error("Colonne 'Hôtel' introuvable dans le fichier. Vérifiez l'en-tête.")
+                else:
+                    _up_df = _up_df.set_index('Hôtel')
+                    # Recalculer RevPAR si absent mais ADR + OCC présents
+                    if 'RevPAR marché €' not in _up_df.columns and 'ADR marché €' in _up_df.columns and 'OCC marché %' in _up_df.columns:
+                        _up_df['RevPAR marché €'] = (_up_df['ADR marché €'] * _up_df['OCC marché %'] / 100).round(2)
+
+                    _matched   = [h for h in dea.hotels if h in _up_df.index]
+                    _unmatched = [h for h in dea.hotels if h not in _up_df.index]
+
+                    if st.button(f"✅ Charger les benchmarks ({len(_matched)} hôtels reconnus)", key="str_bm_load"):
+                        # Initialiser base vide puis remplir les lignes reconnues
+                        _new_bm = pd.DataFrame({
+                            'Marché / Ville'   : [''] * dea.n,
+                            'Catégorie'        : ['4★'] * dea.n,
+                            'RevPAR marché (€)': [100.0] * dea.n,
+                            'ADR marché (€)'   : [0.0] * dea.n,
+                            'OCC marché (%)'   : [0.0] * dea.n,
+                        }, index=dea.hotels)
+                        for h in _matched:
+                            if 'Marché / Ville'  in _up_df.columns: _new_bm.loc[h, 'Marché / Ville']   = str(_up_df.loc[h, 'Marché / Ville'])
+                            if 'Catégorie'       in _up_df.columns: _new_bm.loc[h, 'Catégorie']        = str(_up_df.loc[h, 'Catégorie'])
+                            if 'RevPAR marché €' in _up_df.columns: _new_bm.loc[h, 'RevPAR marché (€)'] = float(_up_df.loc[h, 'RevPAR marché €'])
+                            if 'ADR marché €'    in _up_df.columns: _new_bm.loc[h, 'ADR marché (€)']   = float(_up_df.loc[h, 'ADR marché €'])
+                            if 'OCC marché %'    in _up_df.columns: _new_bm.loc[h, 'OCC marché (%)']   = float(_up_df.loc[h, 'OCC marché %'])
+                        st.session_state['str_benchmarks'] = _new_bm
+                        st.success(f"✅ {len(_matched)} hôtels chargés.")
+                        if _unmatched:
+                            st.warning(f"⚠️ {len(_unmatched)} hôtels non reconnus (noms différents du CSV DEA) : {', '.join(_unmatched)}")
+
+            except Exception as _e:
+                st.error(f"Erreur lecture fichier : {_e}")
 
     # ── Tableau de benchmarks marché par hôtel ────────────────────────────────
     _str_init_data = {
