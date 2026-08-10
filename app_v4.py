@@ -898,7 +898,7 @@ best_topsis = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
 # ─────────────────────────────────────────────
 #  11 ONGLETS
 # ─────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "📋 Rapport Board",
     "📈 Dashboard KPIs",
     "🏆 Classement TOPSIS",
@@ -908,9 +908,10 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.t
     "🔍 Fiche Actif",
     "🌐 Metafrontière",
     "💰 Capital & Flow Through",
-    "📊 Benchmark Marché & Dynamique",
+    "📊 Benchmark Marché",
+    "📈 Malmquist & Tobit",
     "🔀 Synthese Multi-Module",
-    "📊 Variance Budget",
+    "📁 Variance Budget",
 ])
 
 # ══════════════════════════════════════════════
@@ -3142,9 +3143,10 @@ with tab10:
         st.dataframe(pd.DataFrame({'Critère': crit_labels, 'Poids': [f"{v:.1%}" for v in w]}),
                      use_container_width=True, hide_index=True)
 
+# TAB 11 — MALMQUIST & TOBIT
 # ══════════════════════════════════════════════
-    st.markdown('---')
-    st.markdown('<p class="section-title">🚀 Malmquist Productivity Index — Évolution temporelle</p>', unsafe_allow_html=True)
+with tab11:
+    st.markdown('<p class="section-title">📈 Malmquist Productivity Index — Évolution temporelle</p>', unsafe_allow_html=True)
     st.caption(
         "Décompose la variation de productivité entre N-1 et N en deux effets : "
         "Catch-up (mérite de l\'opérateur) × Frontier Shift (progrès du marché). "
@@ -3471,9 +3473,9 @@ with tab10:
             st.error(st.session_state["tobit_results"]["error"])
 
 
-# TAB 11 — SYNTHÈSE MULTI-MODULE (v3.2)
+# TAB 12 — SYNTHÈSE MULTI-MODULE (v3.2)
 # ══════════════════════════════════════════════
-with tab11:
+with tab12:
     _module_results = st.session_state.get("module_results", {})
 
     if not _module_results:
@@ -3529,9 +3531,9 @@ sont automatiquement mappées vers les noms standard des modules.*
 
 
 # ══════════════════════════════════════════════
-# TAB 12 -- VARIANCE BUDGET
+# TAB 13 -- VARIANCE BUDGET
 # ══════════════════════════════════════════════
-with tab12:
+with tab13:
     st.markdown('<p class="section-title">Analyse de Variance Budget -- Format USALI</p>', unsafe_allow_html=True)
     st.caption('Russo & Legel Exhibit 6 : N-1 / Budget / Realise en PAR (Per Available Room), POR (Per Occupied Room), % CA')
 
