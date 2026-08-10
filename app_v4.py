@@ -2626,22 +2626,35 @@ with tab_capital:
                                       dea.bcc_scores.get(h, 0), _cat))
             if plot_data:
                 fig_cap = go.Figure()
-                # Group by category for legend
+                # Labels en mode hover uniquement — évite la superposition dans le cluster 4★
                 _seen_cats = set()
                 for h, gop_, capx, bcc, cat in plot_data:
                     color = _cat_colors.get(cat, '#95a5a6')
                     _show_leg = cat not in _seen_cats
                     _seen_cats.add(cat)
                     fig_cap.add_trace(go.Scatter(
-                        x=[capx], y=[gop_], mode='markers+text', text=[h],
-                        textposition='top center', textfont=dict(size=8),
-                        marker=dict(size=10 + bcc * 8, color=color, opacity=0.85,
-                                    line=dict(width=1, color='white')),
+                        x=[capx], y=[gop_], mode='markers', text=[h],
+                        marker=dict(size=12 + bcc * 10, color=color, opacity=0.85,
+                                    line=dict(width=1.5, color='white')),
                         name=cat, legendgroup=cat, showlegend=_show_leg,
                         hovertemplate=f"<b>{h}</b><br>Catégorie: {cat}<br>"
                                       f"CAPEX/ch: %{{x:.1f}} k€<br>GOPPAM: %{{y:.2f}} €/m²<br>"
                                       f"BCC: {bcc:.1%}<extra></extra>",
                     ))
+                # Annotations texte uniquement pour les outliers (top/bottom GOPPAM)
+                _gop_sorted = sorted(plot_data, key=lambda x: x[1])
+                _label_set = set([_gop_sorted[-1][0], _gop_sorted[-2][0],
+                                   _gop_sorted[0][0], _gop_sorted[1][0]])
+                # Toujours labelliser les 5★ (rares, bien séparés)
+                _label_set |= {h for h, *_, cat in plot_data if cat == '5★'}
+                _label_set |= {h for h, *_, cat in plot_data if cat == '4★ Sup'}
+                for h, gop_, capx, bcc, cat in plot_data:
+                    if h in _label_set:
+                        fig_cap.add_annotation(
+                            x=capx, y=gop_, text=f"<b>{h.split('(')[0].strip()}</b>",
+                            showarrow=False, yshift=12, font=dict(size=8),
+                            bgcolor='rgba(255,255,255,0.7)', borderpad=2,
+                        )
                 fig_cap.update_layout(
                     xaxis=dict(title="CAPEX annuel / chambre (k€) — benchmark par catégorie"),
                     yaxis=dict(title="GOPPAM (€/m²)"),
