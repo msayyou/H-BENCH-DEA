@@ -1,4 +1,4 @@
-# app.py — DEA-H v4
+# app.py — DEA-H v3.9
 # REIV Hospitality · Asset Management Hôtelier
 
 import streamlit as st
@@ -506,7 +506,7 @@ hr { border-color: #e2e8f0 !important; }
 # ─────────────────────────────────────────────
 st.markdown('<h1 class="main-header">DEA-H — Asset Manager Benchmarking</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Analyse BCC/CCR &middot; TOPSIS &middot; K-means &middot; Metafrontière &middot; Multi-Module DEA</p>', unsafe_allow_html=True)
-st.markdown('<div class="reiv-badge"><span>REIV Hospitality . v4</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="reiv-badge"><span>REIV Hospitality · v3.9</span></div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  Session state init (multi-module)
@@ -2849,74 +2849,162 @@ with tab9:
 # ══════════════════════════════════════════════
 with tab10:
     st.markdown('<p class="section-title">📊 Benchmark Marché — STR Indices & Quartiles</p>', unsafe_allow_html=True)
-    col_a, col_b, col_c = st.columns(3)
-    with col_a: mkt_revpar = st.number_input("RevPAR marché (€)", value=100.0, step=1.0, format="%.1f")
-    with col_b: mkt_adr    = st.number_input("ADR marché (€) — optionnel", value=0.0, step=1.0, format="%.1f")
-    with col_c: mkt_occ    = st.number_input("OCC marché (%) — optionnel", value=0.0, step=0.5, format="%.1f")
+    st.caption(
+        "Chaque hôtel a sa propre référence marché (marché local × catégorie). "
+        "Renseignez les valeurs STR correspondantes dans le tableau ci-dessous — "
+        "une ligne par hôtel, depuis vos rapports STR/HotStats respectifs."
+    )
+
+    # ── Tableau de benchmarks marché par hôtel ────────────────────────────────
+    _str_init_data = {
+        'Marché / Ville'   : [''] * dea.n,
+        'Catégorie'        : ['4★'] * dea.n,
+        'RevPAR marché (€)': [100.0] * dea.n,
+        'ADR marché (€)'   : [0.0] * dea.n,
+        'OCC marché (%)'   : [0.0] * dea.n,
+    }
+    _str_init_df = pd.DataFrame(_str_init_data, index=dea.hotels)
+    _str_init_df.index.name = 'Hôtel'
+
+    # Conserver les saisies entre rechargements
+    if ('str_benchmarks' not in st.session_state or
+            set(st.session_state['str_benchmarks'].index) != set(dea.hotels)):
+        st.session_state['str_benchmarks'] = _str_init_df
+
+    st.markdown("**Références marché par hôtel** *(éditez directement dans le tableau)*")
+    _str_bm = st.data_editor(
+        st.session_state['str_benchmarks'],
+        use_container_width=True,
+        column_config={
+            'Marché / Ville'   : st.column_config.TextColumn('Marché / Ville', help='Ex : Paris, Lyon, Resort Côte d\'Azur'),
+            'Catégorie'        : st.column_config.SelectboxColumn('Catégorie', options=['2★','3★','4★','5★','Resort','Appart-hôtel','Auberge']),
+            'RevPAR marché (€)': st.column_config.NumberColumn('RevPAR marché €', min_value=0.0, format='%.1f', help='RevPAR moyen du compset STR de cet hôtel'),
+            'ADR marché (€)'   : st.column_config.NumberColumn('ADR marché €',    min_value=0.0, format='%.1f', help='Optionnel — calcule l\'ARI'),
+            'OCC marché (%)'   : st.column_config.NumberColumn('OCC marché %',    min_value=0.0, max_value=100.0, format='%.1f', help='Optionnel — calcule le MPI'),
+        },
+        key='str_bm_editor',
+    )
+    st.session_state['str_benchmarks'] = _str_bm
+
     st.markdown("---")
 
+    # ── Calcul des indices STR par hôtel (référence propre) ──────────────────
     str_rows = []
     for hotel in dea.hotels:
-        rvp = float(dea.df.loc[hotel, 'revpar'])
-        rgi = round(rvp / mkt_revpar * 100, 1) if mkt_revpar > 0 else None
+        rvp      = float(dea.df.loc[hotel, 'revpar'])
+        _occ_s   = float(dea.df.loc[hotel, 'taux_occupation']) / 100
+        _adr_s   = float(dea.df.loc[hotel, 'adr']) if 'adr' in dea.df.columns else (rvp / _occ_s if _occ_s > 0 else 0.0)
+
+        mkt_rvp  = float(_str_bm.loc[hotel, 'RevPAR marché (€)']) if hotel in _str_bm.index else 0.0
+        mkt_adr  = float(_str_bm.loc[hotel, 'ADR marché (€)'])    if hotel in _str_bm.index else 0.0
+        mkt_occ  = float(_str_bm.loc[hotel, 'OCC marché (%)'])    if hotel in _str_bm.index else 0.0
+        marche   = str(_str_bm.loc[hotel, 'Marché / Ville'])      if hotel in _str_bm.index else ''
+        categorie= str(_str_bm.loc[hotel, 'Catégorie'])           if hotel in _str_bm.index else ''
+
+        rgi = round(rvp / mkt_rvp * 100, 1) if mkt_rvp > 0 else None
         row = {
-            'Hôtel': hotel, 'RevPAR (€)': rvp, 'RGI': rgi,
-            'Signal RGI': ('🟢 Leader' if rgi and rgi >= 110 else
-                           '🟡 Dans le marché' if rgi and rgi >= 90 else '🔴 Sous le marché'),
+            'Hôtel'      : hotel,
+            'Marché'     : marche,
+            'Catégorie'  : categorie,
+            'RevPAR (€)' : round(rvp, 1),
+            'Réf. marché': round(mkt_rvp, 1),
+            'RGI'        : rgi,
+            'Signal RGI' : ('🟢 Leader' if rgi and rgi >= 110 else
+                            '🟡 Dans le marché' if rgi and rgi >= 90 else
+                            '🔴 Sous le marché') if rgi else '—',
         }
-        if 'taux_occupation' in dea.df.columns and mkt_occ > 0:
-            occ = float(dea.df.loc[hotel, 'taux_occupation'])
-            row['OCC (%)'] = occ; row['MPI'] = round(occ / mkt_occ * 100, 1)
+        occ_pct = float(dea.df.loc[hotel, 'taux_occupation'])
+        row['OCC (%)'] = round(occ_pct, 1)
+        if mkt_occ > 0:
+            row['MPI'] = round(occ_pct / mkt_occ * 100, 1)
             row['Signal MPI'] = ('🟢 Leader' if row['MPI'] >= 110 else '🟡 Marché' if row['MPI'] >= 90 else '🔴 Sous')
-        # ADR : RevPAR/TO par defaut, colonne explicite si dispo
-        _occ_s = float(dea.df.loc[hotel, 'taux_occupation']) / 100
-        _rvp_s = float(dea.df.loc[hotel, 'revpar'])
-        _adr_s = float(dea.df.loc[hotel, 'adr']) if 'adr' in dea.df.columns else (_rvp_s / _occ_s if _occ_s > 0 else 0.0)
-        row['ADR (€)'] = round(_adr_s, 2)
+        row['ADR (€)'] = round(_adr_s, 1)
         if mkt_adr > 0 and _adr_s > 0:
             row['ARI'] = round(_adr_s / mkt_adr * 100, 1)
-            row['Signal ARI'] = ('🟢 Leader' if row['ARI'] >= 110
-                                 else '🟡 Marche' if row['ARI'] >= 90 else '🔴 Sous')
+            row['Signal ARI'] = ('🟢 Leader' if row['ARI'] >= 110 else '🟡 Marché' if row['ARI'] >= 90 else '🔴 Sous')
         str_rows.append(row)
 
-    str_df = pd.DataFrame(str_rows).sort_values('RGI', ascending=False)
+    str_df = pd.DataFrame(str_rows)
+    _str_has_rgi = str_df['RGI'].notna().any()
+    if _str_has_rgi:
+        str_df = str_df.sort_values('RGI', ascending=False)
+
+    st.markdown("**Résultats indices STR par hôtel**")
     st.dataframe(str_df, use_container_width=True, hide_index=True)
 
-    fig_rgi = go.Figure(go.Bar(
-        x=str_df['RGI'], y=str_df['Hôtel'], orientation='h',
-        marker=dict(color=str_df['RGI'], colorscale='RdYlGn', cmin=70, cmax=140,
-                    showscale=True, colorbar=dict(title="RGI")),
-        text=[f"{v:.0f}" for v in str_df['RGI']], textposition='outside',
-    ))
-    fig_rgi.add_vline(x=100, line_dash='dash', line_color='gray', annotation_text="Base marché = 100")
-    fig_rgi.update_layout(title="RevPAR Generation Index (RGI)",
-                          xaxis=dict(title="RGI", range=[50, max(str_df['RGI'])*1.15]),
-                          height=max(350, dea.n * 30), paper_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig_rgi, use_container_width=True)
+    # ── Graphique RGI — coloré par catégorie ─────────────────────────────────
+    if _str_has_rgi:
+        _rgi_plot = str_df.dropna(subset=['RGI']).copy()
+        _cat_colors = {'2★':'#95a5a6','3★':'#3498db','4★':'#1a5276','5★':'#d4ac0d',
+                       'Resort':'#27ae60','Appart-hôtel':'#8e44ad','Auberge':'#e67e22'}
+        _bar_colors = [_cat_colors.get(c, '#1c2b5e') for c in _rgi_plot['Catégorie']]
+        fig_rgi = go.Figure(go.Bar(
+            x=_rgi_plot['RGI'], y=_rgi_plot['Hôtel'], orientation='h',
+            marker=dict(color=_bar_colors),
+            text=[f"{v:.0f} | {m}" for v, m in zip(_rgi_plot['RGI'], _rgi_plot['Marché'])],
+            textposition='outside',
+            customdata=_rgi_plot[['Catégorie','Marché']].values,
+            hovertemplate='<b>%{y}</b><br>RGI : %{x}<br>Catégorie : %{customdata[0]}<br>Marché : %{customdata[1]}<extra></extra>',
+        ))
+        fig_rgi.add_vline(x=100, line_dash='dash', line_color='gray', annotation_text="Fair share = 100")
+        fig_rgi.add_vline(x=110, line_dash='dot',  line_color='green', annotation_text="Leader +10%")
+        fig_rgi.add_vline(x=90,  line_dash='dot',  line_color='orange', annotation_text="Seuil −10%")
+        _rgi_max = _rgi_plot['RGI'].max()
+        fig_rgi.update_layout(
+            title="RevPAR Generation Index (RGI) — référence marché propre à chaque hôtel",
+            xaxis=dict(title="RGI", range=[50, max(_rgi_max * 1.18, 130)]),
+            height=max(380, len(_rgi_plot) * 32),
+            paper_bgcolor='rgba(0,0,0,0)', showlegend=False,
+        )
+        st.plotly_chart(fig_rgi, use_container_width=True)
 
-    # Barres MPI et ARI si disponibles
-    str_idx_charts = [(col, ttl, clr) for col, ttl, clr in [
-        ('MPI', 'MPI Market Penetration Index (Occupation)', '#3498db'),
-        ('ARI', 'ARI Average Rate Index (Tarif)', '#9b59b6'),
-    ] if col in str_df.columns]
+        # ── Graphiques MPI / ARI si disponibles ──────────────────────────────
+        str_idx_charts = [(col, ttl) for col, ttl in [
+            ('MPI', 'MPI — Market Penetration Index (Occupation)'),
+            ('ARI', 'ARI — Average Rate Index (Tarif)'),
+        ] if col in str_df.columns]
 
-    if str_idx_charts:
-        idx_c = st.columns(len(str_idx_charts))
-        for ci, (icol, ititle, icolor) in enumerate(str_idx_charts):
-            sub_i = str_df.dropna(subset=[icol]).sort_values(icol)
-            if sub_i.empty: continue
-            fig_i = go.Figure(go.Bar(
-                x=sub_i[icol], y=sub_i['Hôtel'], orientation='h',
-                marker=dict(color=sub_i[icol], colorscale='RdYlGn', cmin=70, cmax=140,
-                            showscale=True, colorbar=dict(title=icol)),
-                text=[f"{v:.0f}" for v in sub_i[icol]], textposition='outside',
-            ))
-            fig_i.add_vline(x=100, line_dash='dash', line_color='gray')
-            fig_i.update_layout(title=ititle, xaxis=dict(range=[50, max(sub_i[icol])*1.15]),
-                                height=max(280, len(sub_i)*28), paper_bgcolor='rgba(0,0,0,0)')
-            idx_c[ci].plotly_chart(fig_i, use_container_width=True)
+        if str_idx_charts:
+            idx_c = st.columns(len(str_idx_charts))
+            for ci, (icol, ititle) in enumerate(str_idx_charts):
+                sub_i = str_df.dropna(subset=[icol]).sort_values(icol)
+                if sub_i.empty: continue
+                _bc = [_cat_colors.get(c, '#1c2b5e') for c in sub_i['Catégorie']]
+                fig_i = go.Figure(go.Bar(
+                    x=sub_i[icol], y=sub_i['Hôtel'], orientation='h',
+                    marker=dict(color=_bc),
+                    text=[f"{v:.0f}" for v in sub_i[icol]], textposition='outside',
+                ))
+                fig_i.add_vline(x=100, line_dash='dash', line_color='gray')
+                fig_i.update_layout(title=ititle, xaxis=dict(range=[50, sub_i[icol].max()*1.18]),
+                                    height=max(280, len(sub_i)*30), paper_bgcolor='rgba(0,0,0,0)')
+                idx_c[ci].plotly_chart(fig_i, use_container_width=True)
 
-        st.info('RGI = RevPAR hôtel / RevPAR marche x100 | MPI = OCC hôtel / OCC marche x100 | ARI = ADR hôtel / ADR marche x100 | >100 = au-dessus fair share | <80 ou >130 = revalider compset (Russo & Legel Exhibit 9)')
+        # ── Vue consolidée par marché ─────────────────────────────────────────
+        _str_has_marche = str_df['Marché'].str.strip().ne('').any()
+        if _str_has_marche:
+            st.markdown("---")
+            st.markdown("**Synthèse par marché** — moyenne des indices RGI par marché/catégorie")
+            _mkt_grp = str_df[str_df['RGI'].notna()].groupby(['Marché', 'Catégorie']).agg(
+                Nb_hotels=('Hôtel', 'count'),
+                RGI_moyen=('RGI', 'mean'),
+                RevPAR_moyen=('RevPAR (€)', 'mean'),
+            ).round(1).reset_index()
+            _mkt_grp.columns = ['Marché','Catégorie','Nb hôtels','RGI moyen','RevPAR moyen (€)']
+            _mkt_grp['Signal'] = _mkt_grp['RGI moyen'].apply(
+                lambda r: '🟢 Leader' if r >= 110 else '🟡 Dans le marché' if r >= 90 else '🔴 Sous le marché'
+            )
+            st.dataframe(_mkt_grp.sort_values('RGI moyen', ascending=False),
+                         use_container_width=True, hide_index=True)
+
+        st.info(
+            'RGI = RevPAR hôtel / RevPAR marché × 100  |  MPI = OCC hôtel / OCC marché × 100  |  '
+            'ARI = ADR hôtel / ADR marché × 100  |  '
+            'Seuil leader ≥ 110  |  Seuil alerte ≤ 80 ou ≥ 130 → revalider compset '
+            '(Russo & Legel, Exhibit 9)'
+        )
+    else:
+        st.info("Renseignez les références marché dans le tableau ci-dessus pour afficher les indices RGI/MPI/ARI.")
 
     # Profil Compset (Exhibit 8)
     st.markdown('---')
@@ -3030,9 +3118,18 @@ with tab10:
     S_plus = np.sqrt(((V-V_plus)**2).sum(axis=1)); S_minus = np.sqrt(((V-V_minus)**2).sum(axis=1))
     Pi = S_minus / (S_plus + S_minus + 1e-10)
     q25t, q50t, q75t = np.percentile(Pi, [25,50,75])
+    def _rgi_for(h):
+        """RGI depuis le tableau par hôtel (str_benchmarks) — None si référence absente."""
+        try:
+            _ref = float(st.session_state['str_benchmarks'].loc[h, 'RevPAR marché (€)'])
+            _rvp = float(dea.df.loc[h, 'revpar'])
+            return round(_rvp / _ref * 100, 1) if _ref > 0 else None
+        except Exception:
+            return None
+
     topsis_bm_rows = [{'Rang': 0, 'Hôtel': hotel, 'Score Pi': round(Pi[i], 4),
                        'DEA BCC': f"{dea.bcc_scores.get(hotel,0):.1%}",
-                       'RGI': round(float(dea.df.loc[hotel,'revpar'])/mkt_revpar*100,1) if mkt_revpar>0 else '—',
+                       'RGI': _rgi_for(hotel) or '—',
                        'Quartile': ('Q4 — Top 25%' if Pi[i]>=q75t else 'Q3' if Pi[i]>=q50t
                                     else 'Q2' if Pi[i]>=q25t else 'Q1 — Bottom 25%')}
                       for i, hotel in enumerate(dea.hotels)]
