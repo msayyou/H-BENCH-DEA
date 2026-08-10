@@ -898,26 +898,26 @@ best_topsis = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
 # ─────────────────────────────────────────────
 #  11 ONGLETS
 # ─────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+tab_board, tab_kpi, tab_topsis, tab_quad, tab_slacks, tab_fiche, tab_kmeans, tab_meta, tab_malm, tab_bmark, tab_capital, tab_budget, tab_synth = st.tabs([
     "📋 Rapport Board",
     "📈 Dashboard KPIs",
     "🏆 Classement TOPSIS",
-    "🗂️ Segmentation K-means",
     "📐 Quadrants & Échelle",
     "🔥 Slacks & Gaspillages",
     "🔍 Fiche Actif",
+    "🗂️ Segmentation K-means",
     "🌐 Metafrontière",
-    "💰 Capital & Flow Through",
+    "📈 Malmquist & Dynamique Temporelle",
     "📊 Benchmark Marché",
-    "📈 Malmquist & Tobit",
-    "🔀 Synthese Multi-Module",
+    "💰 Capital & Flow Through",
     "📁 Variance Budget",
+    "🔀 Synthèse Multi-Module",
 ])
 
 # ══════════════════════════════════════════════
 # TAB 1 — RAPPORT BOARD
 # ══════════════════════════════════════════════
-with tab1:
+with tab_board:
 
     # ── Alerte ratio DMUs/variables ──────────────────────────────────────────
     if getattr(dea, '_dmu_ratio_warning', False):
@@ -1038,6 +1038,71 @@ with tab1:
                 f"{QUADRANT_LABELS.get(dea.quadrants.get(_h,''),'')}"
                 f"{f' · Upside ETP : {_uf} k€/an' if _uf > 0 else ''}</small></div>", unsafe_allow_html=True)
 
+    # ── TOPSIS Composite Score Pi (Tab 10 → résumé Board) ────────────────────
+    st.markdown("---")
+    st.markdown('<p class="section-title">🎯 Classement Composite — Score Pi (Multi-critères)</p>', unsafe_allow_html=True)
+    st.caption(
+        "TOPSIS composite : BCC · RevPAR · Satisfaction · TO · ETP/chambre · Coût/chambre. "
+        "Pondération Shannon entropy (α=0.6). Voir Tab 10 pour le détail complet."
+    )
+    try:
+        _bcc_s  = pd.Series(dea.bcc_scores)
+        _etp_r  = dea.df['nb_employes'] / dea.df['nb_lits']
+        _cpor   = dea.df['couts_op_ex'] / dea.df['nb_lits']
+        _dm_b   = pd.DataFrame({
+            'DEA BCC'   : _bcc_s,
+            'RevPAR'    : dea.df['revpar'],
+            'Satisfaction': dea.df['satisfaction'],
+            'TO%'       : dea.df['taux_occupation'],
+            'ETP_inv'   : (1 / _etp_r).replace([np.inf], 0),
+            'CPOR_inv'  : (1 / _cpor).replace([np.inf], 0),
+        }, index=dea.hotels).astype(float)
+        _X = _dm_b.values; _nc = _X.shape[1]
+        _Xn = np.zeros_like(_X)
+        for _j in range(_nc):
+            _xmn, _xmx = _X[:,_j].min(), _X[:,_j].max()
+            _Xn[:,_j] = (_X[:,_j]-_xmn)/(_xmx-_xmn) if _xmx > _xmn else 0.5
+        _ej = np.zeros(_nc)
+        for _j in range(_nc):
+            _col = _Xn[:,_j]; _s = _col.sum()
+            if _s > 0:
+                _p = _col / _s
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    _lp = np.where(_p>0, np.log(_p), 0)
+                _ej[_j] = -np.sum(_p*_lp)/np.log(dea.n) if dea.n > 1 else 0
+        _dj = 1 - _ej; _alpha = 0.6
+        _w  = (1-_alpha)*(_dj/_dj.sum() if _dj.sum()>0 else np.ones(_nc)/_nc) + _alpha*(np.ones(_nc)/_nc)
+        _V  = _Xn * _w; _Vp = _V.max(axis=0); _Vm = _V.min(axis=0)
+        _Sp = np.sqrt(((_V-_Vp)**2).sum(axis=1)); _Sm = np.sqrt(((_V-_Vm)**2).sum(axis=1))
+        _Pi = _Sm / (_Sp + _Sm + 1e-10)
+        _q25pi, _q75pi = np.percentile(_Pi, [25, 75])
+        _pi_rows = [{'Rang': 0, 'Hôtel': h,
+                     'Score Pi': round(_Pi[i], 4),
+                     'DEA BCC': f"{dea.bcc_scores.get(h,0):.1%}",
+                     'Quadrant': QUADRANT_LABELS.get(dea.quadrants.get(h,''), ''),
+                     'Signal': ('🟢 Top 25%' if _Pi[i]>=_q75pi else '🔴 Bottom 25%' if _Pi[i]<_q25pi else '🟡 Médian')}
+                    for i, h in enumerate(dea.hotels)]
+        _pi_df = pd.DataFrame(_pi_rows).sort_values('Score Pi', ascending=False).reset_index(drop=True)
+        _pi_df['Rang'] = range(1, len(_pi_df)+1)
+        _pic1, _pic2 = st.columns([2, 1])
+        with _pic1:
+            st.dataframe(_pi_df, use_container_width=True, hide_index=True)
+            st.download_button("⬇️ Exporter Score Pi (CSV)",
+                data=_pi_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
+                file_name=f"deah_score_pi_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+                key='dl_pi_board')
+        with _pic2:
+            _best_pi  = _pi_df.iloc[0]['Hôtel']
+            _worst_pi = _pi_df.iloc[-1]['Hôtel']
+            st.metric("🥇 Leader composite", _best_pi[:20])
+            st.metric("Score Pi leader", f"{_pi_df.iloc[0]['Score Pi']:.4f}")
+            st.metric("⚠️ Priorité composite", _worst_pi[:20])
+            st.metric("Score Pi priorité", f"{_pi_df.iloc[-1]['Score Pi']:.4f}")
+        # Stocker pour réutilisation Tab 10
+        st.session_state['score_pi_df'] = _pi_df
+    except Exception as _e_pi:
+        st.info(f"Score Pi : données insuffisantes pour le calcul composite ({_e_pi})")
+
     # ── Tableau Board + Quadrants + Mahalanobis ──────────────────────────────
     st.markdown("---")
     st.markdown('<p class="section-title">📋 Tableau Consolidé — Tous les actifs</p>', unsafe_allow_html=True)
@@ -1141,7 +1206,7 @@ def _sbm_dominant_analysis(sbm_hotel: dict, dea, hotel: str) -> dict:
 
 # TAB 2 — DASHBOARD KPIs
 # ══════════════════════════════════════════════
-with tab2:
+with tab_kpi:
     st.markdown('<p class="section-title">Distribution des scores d\'efficacité</p>', unsafe_allow_html=True)
 
     # ── Signal benchmark % hôtels efficients (Poldrugovac et al. 2016 ; papier Via@ 2013) ──
@@ -1266,7 +1331,7 @@ with tab2:
 # ══════════════════════════════════════════════
 # TAB 3 — CLASSEMENT TOPSIS
 # ══════════════════════════════════════════════
-with tab3:
+with tab_topsis:
     st.markdown('<p class="section-title">🏆 Classement TOPSIS — Multi-critères pondérés</p>', unsafe_allow_html=True)
     st.caption("Critères : BCC 35% · Scale Efficiency 25% · RevPAR 25% · Taux d'Occupation 15%")
     ranking = dea.get_topsis_ranking()
@@ -1481,7 +1546,7 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
 # ══════════════════════════════════════════════
 # TAB 4 — SEGMENTATION K-MEANS
 # ══════════════════════════════════════════════
-with tab4:
+with tab_kmeans:
     st.markdown('<p class="section-title">🗂️ Segmentation K-means — 4 Clusters</p>', unsafe_allow_html=True)
 
     # Silhouette score + méthode du coude
@@ -1547,7 +1612,7 @@ with tab4:
 # ══════════════════════════════════════════════
 # TAB 5 — QUADRANTS & ÉCHELLE
 # ══════════════════════════════════════════════
-with tab5:
+with tab_quad:
     st.markdown('<p class="section-title">📐 4 Quadrants — Gestion Pure × Efficacité d\'Échelle</p>', unsafe_allow_html=True)
     quadrant_colors = {'Q1': '#1e8449', 'Q2': '#2e6da4', 'Q3': '#f39c12', 'Q4': '#c0392b'}
     fig_q = go.Figure()
@@ -1626,7 +1691,7 @@ Réf. : Assaf, Barros & Josiassen (2010) — metafrontière GTE/MTE/TGR.
 # ══════════════════════════════════════════════
 # TAB 6 — SLACKS & GASPILLAGES
 # ══════════════════════════════════════════════
-with tab6:
+with tab_slacks:
     st.markdown('<p class="section-title">🔥 Slacks — Gaspillages et Potentiels d\'Amélioration</p>', unsafe_allow_html=True)
     input_names  = ['nb_lits', 'nb_employes', 'couts_op_ex']
     output_names = ['revpar', 'satisfaction', 'taux_occupation']
@@ -1735,7 +1800,7 @@ with tab6:
 # ══════════════════════════════════════════════
 # TAB 7 — FICHE ACTIF DRILL-DOWN
 # ══════════════════════════════════════════════
-with tab7:
+with tab_fiche:
     st.markdown('<p class="section-title">🔍 Fiche Actif — Analyse Détaillée</p>', unsafe_allow_html=True)
     selected = st.selectbox("Sélectionner un hôtel", options=dea.hotels, index=0)
     bcc   = dea.bcc_scores[selected]; ccr   = dea.ccr_scores[selected]
@@ -2265,7 +2330,7 @@ with tab7:
 # ══════════════════════════════════════════════
 # TAB 8 — METAFRONTIÈRE
 # ══════════════════════════════════════════════
-with tab8:
+with tab_meta:
     st.markdown('<p class="section-title">🌐 Metafrontière — Analyse GTE / MTE / TGR</p>', unsafe_allow_html=True)
     st.info("""
 **Principe (Assaf et al., 2010) :**
@@ -2446,7 +2511,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
 # ══════════════════════════════════════════════
 # TAB 9 — CAPITAL & FLOW THROUGH
 # ══════════════════════════════════════════════
-with tab9:
+with tab_capital:
     st.markdown('<p class="section-title">💰 Efficience Capital & Flow Through</p>', unsafe_allow_html=True)
     # Flow Through global — défini dans la sidebar (pas de différenciation par étoiles)
     # FT% global depuis sidebar
@@ -2848,7 +2913,7 @@ with tab9:
 # ══════════════════════════════════════════════
 # TAB 10 — BENCHMARK MARCHÉ
 # ══════════════════════════════════════════════
-with tab10:
+with tab_bmark:
     st.markdown('<p class="section-title">📊 Benchmark Marché — STR Indices & Quartiles</p>', unsafe_allow_html=True)
     st.caption(
         "Chaque hôtel a sa propre référence marché (marché local × catégorie). "
@@ -3166,43 +3231,47 @@ with tab10:
     )
 
     st.markdown("---")
-    st.markdown('<p class="section-title">TOPSIS Composite DEA + KPIs financiers</p>', unsafe_allow_html=True)
-    st.caption("Pondération hybride Shannon entropy (α=0.6) — Vlad, Toma & Fîntîneru (2026)")
+    st.markdown('<p class="section-title">🎯 TOPSIS Composite — Score Pi</p>', unsafe_allow_html=True)
+    st.caption("Pondération hybride Shannon entropy (α=0.6) — calculé en Tab 1 (Rapport Board). Voir Tab 1 pour l'export CSV complet.")
 
-    bcc_s = pd.Series(dea.bcc_scores); etp_r = dea.df['nb_employes'] / dea.df['nb_lits']
-    cpor  = dea.df['couts_op_ex'] / dea.df['nb_lits']
-    dm = pd.DataFrame({
-        'DEA BCC': bcc_s, 'RevPAR': dea.df['revpar'], 'Satisfaction': dea.df['satisfaction'],
-        'TO%': dea.df['taux_occupation'],
-        'ETP_inv': (1 / etp_r).replace([np.inf], 0), 'CPOR_inv': (1 / cpor).replace([np.inf], 0),
-    }, index=dea.hotels).astype(float)
-
-    cap_inp_tab10 = st.session_state.get('capital_input', None)
-    if cap_inp_tab10 is not None and 'gop (k€)' in cap_inp_tab10.columns:
-        rev_est = dea.df['revpar'] * dea.df['taux_occupation']/100 * 365 * dea.df['nb_lits']
-        gop_vals = cap_inp_tab10['gop (k€)'].astype(float) * 1000
-        gop_margin = (gop_vals / rev_est.replace(0, np.nan)).fillna(0)
-        dm['GOP Margin'] = gop_margin
-
-    crit_labels = list(dm.columns); X = dm.values.astype(float); n_dmu, n_crit = X.shape
-    Xn = np.zeros_like(X)
-    for j in range(n_crit):
-        xmin, xmax = X[:,j].min(), X[:,j].max()
-        Xn[:,j] = (X[:,j]-xmin)/(xmax-xmin) if xmax > xmin else 0.5
-    ej = np.zeros(n_crit)
-    for j in range(n_crit):
-        col = Xn[:,j]; s = col.sum()
-        if s > 0:
-            p = col / s
-            with np.errstate(divide='ignore', invalid='ignore'):
-                lp = np.where(p>0, np.log(p), 0)
-            ej[j] = -np.sum(p*lp) / np.log(n_dmu) if n_dmu > 1 else 0
-    alpha = 0.6; dj = 1 - ej
-    w_ent = dj / dj.sum() if dj.sum() > 0 else np.ones(n_crit)/n_crit
-    w = (1-alpha)*(dj/dj.sum() if dj.sum()>0 else np.ones(n_crit)/n_crit) + alpha*(np.ones(n_crit)/n_crit)
-    V = Xn * w; V_plus = V.max(axis=0); V_minus = V.min(axis=0)
-    S_plus = np.sqrt(((V-V_plus)**2).sum(axis=1)); S_minus = np.sqrt(((V-V_minus)**2).sum(axis=1))
-    Pi = S_minus / (S_plus + S_minus + 1e-10)
+    # Réutiliser le Score Pi calculé en Tab 1 si disponible
+    _pi_cached = st.session_state.get('score_pi_df', None)
+    if _pi_cached is not None:
+        Pi = np.array([_pi_cached.loc[_pi_cached['Hôtel']==h, 'Score Pi'].values[0]
+                       if h in _pi_cached['Hôtel'].values else 0.0
+                       for h in dea.hotels])
+    else:
+        # Recalcul si Tab 1 non encore visité
+        bcc_s = pd.Series(dea.bcc_scores); etp_r = dea.df['nb_employes'] / dea.df['nb_lits']
+        cpor  = dea.df['couts_op_ex'] / dea.df['nb_lits']
+        dm = pd.DataFrame({
+            'DEA BCC': bcc_s, 'RevPAR': dea.df['revpar'], 'Satisfaction': dea.df['satisfaction'],
+            'TO%': dea.df['taux_occupation'],
+            'ETP_inv': (1 / etp_r).replace([np.inf], 0), 'CPOR_inv': (1 / cpor).replace([np.inf], 0),
+        }, index=dea.hotels).astype(float)
+        cap_inp_tab10 = st.session_state.get('capital_input', None)
+        if cap_inp_tab10 is not None and 'gop (k€)' in cap_inp_tab10.columns:
+            rev_est = dea.df['revpar'] * dea.df['taux_occupation']/100 * 365 * dea.df['nb_lits']
+            gop_vals = cap_inp_tab10['gop (k€)'].astype(float) * 1000
+            dm['GOP Margin'] = (gop_vals / rev_est.replace(0, np.nan)).fillna(0)
+        crit_labels = list(dm.columns); X = dm.values.astype(float); n_dmu, n_crit = X.shape
+        Xn = np.zeros_like(X)
+        for j in range(n_crit):
+            xmin, xmax = X[:,j].min(), X[:,j].max()
+            Xn[:,j] = (X[:,j]-xmin)/(xmax-xmin) if xmax > xmin else 0.5
+        ej = np.zeros(n_crit)
+        for j in range(n_crit):
+            col = Xn[:,j]; s = col.sum()
+            if s > 0:
+                p = col / s
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    lp = np.where(p>0, np.log(p), 0)
+                ej[j] = -np.sum(p*lp) / np.log(n_dmu) if n_dmu > 1 else 0
+        alpha = 0.6; dj = 1 - ej
+        w = (1-alpha)*(dj/dj.sum() if dj.sum()>0 else np.ones(n_crit)/n_crit) + alpha*(np.ones(n_crit)/n_crit)
+        V = Xn * w; V_plus = V.max(axis=0); V_minus = V.min(axis=0)
+        S_plus = np.sqrt(((V-V_plus)**2).sum(axis=1)); S_minus = np.sqrt(((V-V_minus)**2).sum(axis=1))
+        Pi = S_minus / (S_plus + S_minus + 1e-10)
     q25t, q50t, q75t = np.percentile(Pi, [25,50,75])
     def _rgi_for(h):
         """RGI depuis le tableau par hôtel (str_benchmarks) — None si référence absente."""
@@ -3237,7 +3306,7 @@ with tab10:
 
 # TAB 11 — MALMQUIST & TOBIT
 # ══════════════════════════════════════════════
-with tab11:
+with tab_malm:
     st.markdown('<p class="section-title">📈 Malmquist Productivity Index — Évolution temporelle</p>', unsafe_allow_html=True)
     st.caption(
         "Décompose la variation de productivité entre N-1 et N en deux effets : "
@@ -3567,7 +3636,7 @@ with tab11:
 
 # TAB 12 — SYNTHÈSE MULTI-MODULE (v3.2)
 # ══════════════════════════════════════════════
-with tab12:
+with tab_synth:
     _module_results = st.session_state.get("module_results", {})
 
     if not _module_results:
@@ -3625,7 +3694,7 @@ sont automatiquement mappées vers les noms standard des modules.*
 # ══════════════════════════════════════════════
 # TAB 13 -- VARIANCE BUDGET
 # ══════════════════════════════════════════════
-with tab13:
+with tab_budget:
     st.markdown('<p class="section-title">Analyse de Variance Budget -- Format USALI</p>', unsafe_allow_html=True)
     st.caption('Russo & Legel Exhibit 6 : N-1 / Budget / Realise en PAR (Per Available Room), POR (Per Occupied Room), % CA')
 
