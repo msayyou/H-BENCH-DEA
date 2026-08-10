@@ -646,8 +646,11 @@ def load_sample() -> pd.DataFrame:
         'taux_occupation': [82, 79, 85, 88, 81, 76, 84, 73, 78, 75, 80, 83, 74, 81, 86, 68, 92, 84, 87, 65, 72, 79, 83, 89],
         'surface_m2': [9600, 12640, 7360, 13680, 11600, 12120, 10880, 7200, 10960, 14240, 16000, 7000, 7960, 5960, 11520, 10320, 31760, 12000, 13720, 8840, 7320, 4080, 21800, 31960],
         'gop': [4740.6, 5727.3, 3122.5, 5731.0, 4851.0, 3730.7, 4923.9, 5654.9, 5480.3, 6190.7, 8768.8, 2645.5, 2316.5, 2363.9, 5838.8, 3927.0, 10298.6, 3758.2, 5205.4, 3049.9, 1925.8, 2004.3, 9163.3, 11211.9],
-        'capex_annuel': [360.0, 474.0, 276.0, 513.0, 435.0, 454.5, 408.0, 270.0, 411.0, 534.0, 600.0, 262.5, 298.5, 223.5, 432.0, 387.0, 1191.0, 450.0, 514.5, 331.5, 274.5, 153.0, 817.5, 1198.5],
+        # CAPEX différenciés par catégorie (k€/an): 3★=0.90, 4★=1.75, 4★Sup=2.40, 5★=3.80 k€/ch
+        # (taux benchmark secteur — CAPEX réels par hôtel non disponibles)
+        'capex_annuel': [576.0, 553.0, 322.0, 598.5, 507.5, 530.2, 476.0, 684.0, 1041.2, 623.0, 700.0, 157.5, 179.1, 260.8, 504.0, 451.5, 714.6, 525.0, 600.2, 386.8, 320.2, 178.5, 953.8, 1398.2],
         'classement_etoiles': [5, 4, 4, 4, 4, 3, 5, 5, 5, 4, 5, 3, 3, 4, 5, 4, 3, 3, 4, 4, 3, 5, 4, 3],
+        'categorie': ['4★ Sup','4★','4★','4★','4★','3★','4★','5★','5★','4★','4★','3★','3★','4★','4★','4★','3★','4★','4★','4★','3★','4★','4★','4★'],
         'energy_kwh': [2190000, 2883500, 1679000, 3120750, 2646250, 2764875, 2482000, 1642500, 2500250, 3248500, 3650000, 1596875, 1815875, 1359625, 2628000, 2354250, 7245250, 2737500, 3129875, 2016625, 1669875, 930750, 4973125, 7290875],
         'water_m3': [43800, 57670, 33580, 62415, 52925, 55298, 49640, 32850, 50005, 64970, 73000, 31938, 36318, 27193, 52560, 47085, 144905, 54750, 62598, 40333, 33398, 18615, 99463, 145818],
         'co2_tonnes': [1095, 1442, 840, 1560, 1323, 1382, 1241, 821, 1250, 1624, 1825, 798, 908, 680, 1314, 1177, 3623, 1369, 1565, 1008, 835, 465, 2487, 3645],
@@ -2613,20 +2616,43 @@ with tab_capital:
     
         col_l, col_r = st.columns(2)
         with col_l:
-            plot_data = [(r['Hôtel'], r['GOPPAM (€/m²)'], r['CAPEX/chambre (k€)'], dea.bcc_scores.get(r['Hôtel'],0))
-                         for r in cap_rows if r['GOPPAM (€/m²)'] != '—' and r['CAPEX/chambre (k€)'] != '—']
+            _cat_colors = {'3★': '#3498db', '4★': '#2ecc71', '4★ Sup': '#f39c12', '5★': '#9b59b6'}
+            plot_data = []
+            for r in cap_rows:
+                if r['GOPPAM (€/m²)'] != '—' and r['CAPEX/chambre (k€)'] != '—':
+                    h = r['Hôtel']
+                    _cat = dea.df.loc[h, 'categorie'] if 'categorie' in dea.df.columns else '4★'
+                    plot_data.append((h, r['GOPPAM (€/m²)'], r['CAPEX/chambre (k€)'],
+                                      dea.bcc_scores.get(h, 0), _cat))
             if plot_data:
                 fig_cap = go.Figure()
-                for h, gop_, capx, bcc in plot_data:
-                    color = '#27ae60' if bcc>=0.90 else '#f39c12' if bcc>=0.80 else '#e74c3c'
+                # Group by category for legend
+                _seen_cats = set()
+                for h, gop_, capx, bcc, cat in plot_data:
+                    color = _cat_colors.get(cat, '#95a5a6')
+                    _show_leg = cat not in _seen_cats
+                    _seen_cats.add(cat)
                     fig_cap.add_trace(go.Scatter(
-                        x=[capx], y=[gop_], mode='markers+text', text=[h], textposition='top center',
-                        textfont=dict(size=8), marker=dict(size=10+bcc*8, color=color, opacity=0.8),
-                        showlegend=False,
+                        x=[capx], y=[gop_], mode='markers+text', text=[h],
+                        textposition='top center', textfont=dict(size=8),
+                        marker=dict(size=10 + bcc * 8, color=color, opacity=0.85,
+                                    line=dict(width=1, color='white')),
+                        name=cat, legendgroup=cat, showlegend=_show_leg,
+                        hovertemplate=f"<b>{h}</b><br>Catégorie: {cat}<br>"
+                                      f"CAPEX/ch: %{{x:.1f}} k€<br>GOPPAM: %{{y:.2f}} €/m²<br>"
+                                      f"BCC: {bcc:.1%}<extra></extra>",
                     ))
-                fig_cap.update_layout(xaxis=dict(title="CAPEX annuel / chambre (k€)"),
-                                      yaxis=dict(title="GOPPAM (€/m²)"),
-                                      height=400, paper_bgcolor='rgba(0,0,0,0)')
+                fig_cap.update_layout(
+                    xaxis=dict(title="CAPEX annuel / chambre (k€) — benchmark par catégorie"),
+                    yaxis=dict(title="GOPPAM (€/m²)"),
+                    legend=dict(title="Catégorie", orientation="h", yanchor="bottom", y=1.02),
+                    height=420, paper_bgcolor='rgba(0,0,0,0)',
+                    annotations=[dict(
+                        text="⚠️ CAPEX = taux benchmark secteur (données réelles non disponibles)",
+                        xref="paper", yref="paper", x=0, y=-0.15,
+                        showarrow=False, font=dict(size=10, color='grey'), align='left',
+                    )],
+                )
                 st.plotly_chart(fig_cap, use_container_width=True)
         with col_r:
             margin_data = [(r['Hôtel'], float(r['Marge GOP %'].replace('%','')), dea.bcc_scores.get(r['Hôtel'],0))
