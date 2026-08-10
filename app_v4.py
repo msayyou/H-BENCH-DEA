@@ -1098,8 +1098,10 @@ with tab_board:
             st.metric("Score Pi leader", f"{_pi_df.iloc[0]['Score Pi']:.4f}")
             st.metric("⚠️ Priorité composite", _worst_pi[:20])
             st.metric("Score Pi priorité", f"{_pi_df.iloc[-1]['Score Pi']:.4f}")
-        # Stocker pour réutilisation Tab 10
+        # Stocker pour réutilisation Tab 10 (Pi + poids critères)
         st.session_state['score_pi_df'] = _pi_df
+        st.session_state['score_pi_crits'] = ['DEA BCC','RevPAR','Satisfaction','TO%','ETP_inv','CPOR_inv']
+        st.session_state['score_pi_w'] = _w.tolist()
     except Exception as _e_pi:
         st.info(f"Score Pi : données insuffisantes pour le calcul composite ({_e_pi})")
 
@@ -3301,8 +3303,13 @@ with tab_bmark:
         )
     with col_y:
         st.markdown("**Poids des critères**")
-        st.dataframe(pd.DataFrame({'Critère': crit_labels, 'Poids': [f"{v:.1%}" for v in w]}),
-                     use_container_width=True, hide_index=True)
+        _pi_crits = st.session_state.get('score_pi_crits', None)
+        _pi_w     = st.session_state.get('score_pi_w', None)
+        if _pi_crits and _pi_w:
+            st.dataframe(pd.DataFrame({'Critère': _pi_crits, 'Poids': [f"{v:.1%}" for v in _pi_w]}),
+                         use_container_width=True, hide_index=True)
+        else:
+            st.caption("Visitez d'abord Tab 1 (Rapport Board) pour calculer et afficher les poids.")
 
 # TAB 11 — MALMQUIST & TOBIT
 # ══════════════════════════════════════════════
