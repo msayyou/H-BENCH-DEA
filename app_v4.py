@@ -2932,6 +2932,11 @@ with tab10:
 
     st.markdown("**Résultats indices STR par hôtel**")
     st.dataframe(str_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        "⬇️ Télécharger indices STR (CSV)", data=str_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
+        file_name=f"deah_str_indices_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+        key='dl_str_indices',
+    )
 
     # ── Graphique RGI — coloré par catégorie ─────────────────────────────────
     if _str_has_rgi:
@@ -3061,7 +3066,13 @@ with tab10:
                         'Min': round(s.min(),2), 'P25': round(s.quantile(0.25),2),
                         'Médiane': round(s.median(),2), 'P75': round(s.quantile(0.75),2),
                         'Max': round(s.max(),2), 'Moy.': round(s.mean(),2)})
-    st.dataframe(pd.DataFrame(q_stats), use_container_width=True, hide_index=True)
+    _q_stats_df = pd.DataFrame(q_stats)
+    st.dataframe(_q_stats_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        "⬇️ Télécharger quartiles KPIs (CSV)", data=_q_stats_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
+        file_name=f"deah_quartiles_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+        key='dl_quartiles',
+    )
 
     selected_bm = st.selectbox("Hôtel à positionner", dea.hotels, key='bm_hotel')
     pos_rows = []
@@ -3078,7 +3089,14 @@ with tab10:
                    else '🟠 Q2 (25-50%)' if val <= q75 else '🔴 Bottom 25%')
         pos_rows.append({'KPI': kpi_name, 'Valeur': round(val,2), 'P25': round(q25,2),
                          'Médiane': round(q50,2), 'P75': round(q75,2), 'Position': pos})
-    st.dataframe(pd.DataFrame(pos_rows), use_container_width=True, hide_index=True)
+    _pos_df = pd.DataFrame(pos_rows)
+    st.dataframe(_pos_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        f"⬇️ Télécharger positionnement {selected_bm} (CSV)",
+        data=_pos_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
+        file_name=f"deah_position_{selected_bm}_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+        key='dl_position',
+    )
 
     st.markdown("---")
     st.markdown('<p class="section-title">TOPSIS Composite DEA + KPIs financiers</p>', unsafe_allow_html=True)
@@ -3137,7 +3155,14 @@ with tab10:
     topsis_bm_df = (pd.DataFrame(topsis_bm_rows).sort_values('Score Pi', ascending=False).reset_index(drop=True))
     topsis_bm_df['Rang'] = range(1, len(topsis_bm_df)+1)
     col_x, col_y = st.columns([2,1])
-    with col_x: st.dataframe(topsis_bm_df, use_container_width=True, hide_index=True)
+    with col_x:
+        st.dataframe(topsis_bm_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Télécharger TOPSIS composite (CSV)",
+            data=topsis_bm_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
+            file_name=f"deah_topsis_composite_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+            key='dl_topsis_bm',
+        )
     with col_y:
         st.markdown("**Poids des critères**")
         st.dataframe(pd.DataFrame({'Critère': crit_labels, 'Poids': [f"{v:.1%}" for v in w]}),
