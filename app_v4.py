@@ -1,4 +1,4 @@
-# app.py — DEA-H v3.9
+# app.py — DEA-H v4
 # REIV Hospitality · Asset Management Hôtelier
 
 import streamlit as st
@@ -292,7 +292,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10) -
     story.append(Paragraph(f"{dea.n} hôtels analysés", cover_sub))
     story.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", cover_sub))
     story.append(Spacer(1, 1*cm))
-    story.append(Paragraph("REIV Hospitality · DEA-H v3.9", S("ft", fontSize=10, textColor=colors.grey, alignment=TA_CENTER)))
+    story.append(Paragraph("REIV Hospitality · DEA-H v4", S("ft", fontSize=10, textColor=colors.grey, alignment=TA_CENTER)))
     story.append(PageBreak())
 
     story.append(Paragraph("📊 Dashboard Portfolio", h1_s))
@@ -356,7 +356,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10) -
 
     story.append(Spacer(1, 12))
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
-    story.append(Paragraph("DEA-H v3.9 · REIV Hospitality · Confidentiel", small_s))
+    story.append(Paragraph("DEA-H v4 · REIV Hospitality · Confidentiel", small_s))
     doc.build(story)
     return buf.getvalue()
 
@@ -506,7 +506,7 @@ hr { border-color: #e2e8f0 !important; }
 # ─────────────────────────────────────────────
 st.markdown('<h1 class="main-header">DEA-H — Asset Manager Benchmarking</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Analyse BCC/CCR &middot; TOPSIS &middot; K-means &middot; Metafrontière &middot; Multi-Module DEA</p>', unsafe_allow_html=True)
-st.markdown('<div class="reiv-badge"><span>REIV Hospitality · v3.9</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="reiv-badge"><span>REIV Hospitality · v4</span></div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  Session state init (multi-module)
@@ -632,7 +632,7 @@ NUMERIC_COLS = ['nb_lits', 'nb_employes', 'couts_op_ex', 'revpar', 'satisfaction
 def load_sample() -> pd.DataFrame:
     """
     Portefeuille de référence — Meliá Group Espagne (24 hôtels)
-    DEA-H v3.9 · REIV Hospitality
+    DEA-H v4 · REIV Hospitality
     Satisfaction /5→/10 · couts_op_ex M€ · financiers k€
     Active tous les onglets : Capital · MDEA · Malmquist · ESG · Multi-Module
     """
@@ -930,7 +930,7 @@ with tab_board:
     _orient_lbl = "📥 Input-Oriented" if getattr(dea, 'orientation', 'input') == 'input' else "📤 Output-Oriented"
     st.markdown(
         f"<div style='background:#1a3a5c;color:white;padding:10px 16px;border-radius:8px;margin-bottom:12px;'>"
-        f"<b>DEA-H v3.9 — Rapport Comité d'Investissement</b> &nbsp;·&nbsp; "
+        f"<b>DEA-H v4 — Rapport Comité d'Investissement</b> &nbsp;·&nbsp; "
         f"{dea.n} hôtels analysés &nbsp;·&nbsp; {_orient_lbl} &nbsp;·&nbsp; "
         f"{datetime.now().strftime('%d/%m/%Y')}</div>",
         unsafe_allow_html=True,
@@ -3856,7 +3856,7 @@ st.markdown("---")
 st.markdown("---")
 st.markdown(
     """<div style='text-align:center;color:#94a3b8;font-size:0.75rem;line-height:1.8;padding:0.5rem 0;'>
-    <b>DEA-H v3.9 · REIV Hospitality · Mehdi Sayyou</b><br>
+    <b>DEA-H v4 · REIV Hospitality · Mehdi Sayyou</b><br>
     Modèles : BCC/CCR Input/Output-Oriented · TOPSIS Shannon entropy · K-means · Metafrontière GTE/MTE/TGR ·
     Malmquist TFP (Catch-up × Frontier Shift) · Tobit Second Stage · Multi-Module DEA (7 dimensions)<br>
     <b>Références :</b>
