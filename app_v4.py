@@ -1,4 +1,4 @@
-# app.py — DEA-H v4
+# app.py — DEA-H v3.9
 # REIV Hospitality · Asset Management Hôtelier
 
 import streamlit as st
@@ -292,7 +292,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10) -
     story.append(Paragraph(f"{dea.n} hôtels analysés", cover_sub))
     story.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')}", cover_sub))
     story.append(Spacer(1, 1*cm))
-    story.append(Paragraph("REIV Hospitality · DEA-H v4", S("ft", fontSize=10, textColor=colors.grey, alignment=TA_CENTER)))
+    story.append(Paragraph("REIV Hospitality · DEA-H v3.9", S("ft", fontSize=10, textColor=colors.grey, alignment=TA_CENTER)))
     story.append(PageBreak())
 
     story.append(Paragraph("📊 Dashboard Portfolio", h1_s))
@@ -356,7 +356,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10) -
 
     story.append(Spacer(1, 12))
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
-    story.append(Paragraph("DEA-H v4 · REIV Hospitality · Confidentiel", small_s))
+    story.append(Paragraph("DEA-H v3.9 · REIV Hospitality · Confidentiel", small_s))
     doc.build(story)
     return buf.getvalue()
 
@@ -365,6 +365,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10) -
 from malmquist_tobit import (
     compute_malmquist, has_n1_cols, compute_tobit,
     compute_mdea_room_fb, mann_whitney_groups, MDEA_COL_MAP,
+    compute_simar_wilson, build_stage2_vars,
 )
 
 warnings.filterwarnings('ignore')
@@ -506,7 +507,7 @@ hr { border-color: #e2e8f0 !important; }
 # ─────────────────────────────────────────────
 st.markdown('<h1 class="main-header">DEA-H — Asset Manager Benchmarking</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Analyse BCC/CCR &middot; TOPSIS &middot; K-means &middot; Metafrontière &middot; Multi-Module DEA</p>', unsafe_allow_html=True)
-st.markdown('<div class="reiv-badge"><span>REIV Hospitality · v4</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="reiv-badge"><span>REIV Hospitality · v3.9</span></div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  Session state init (multi-module)
@@ -632,7 +633,7 @@ NUMERIC_COLS = ['nb_lits', 'nb_employes', 'couts_op_ex', 'revpar', 'satisfaction
 def load_sample() -> pd.DataFrame:
     """
     Portefeuille de référence — Meliá Group Espagne (24 hôtels)
-    DEA-H v4 · REIV Hospitality
+    DEA-H v3.9 · REIV Hospitality
     Satisfaction /5→/10 · couts_op_ex M€ · financiers k€
     Active tous les onglets : Capital · MDEA · Malmquist · ESG · Multi-Module
     """
@@ -651,6 +652,9 @@ def load_sample() -> pd.DataFrame:
         'capex_annuel': [576.0, 553.0, 322.0, 598.5, 507.5, 530.2, 476.0, 684.0, 1041.2, 623.0, 700.0, 157.5, 179.1, 260.8, 504.0, 451.5, 714.6, 525.0, 600.2, 386.8, 320.2, 178.5, 953.8, 1398.2],
         'classement_etoiles': [5, 4, 4, 4, 4, 3, 5, 5, 5, 4, 5, 3, 3, 4, 5, 4, 3, 3, 4, 4, 3, 5, 4, 3],
         'categorie': ['4★ Sup','4★','4★','4★','4★','3★','4★','5★','5★','4★','4★','3★','3★','4★','4★','4★','3★','4★','4★','4★','3★','4★','4★','4★'],
+        # Saisonnalité : 1=resort/côtier/montagne (haute saison), 0=urbain/année ronde
+        # Réf. : Pulina & Santoni (2018) ; Cracolici et al. (2008)
+        'saison_dummy': [1,1,1,1,1,1,1,1,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,1],
         'energy_kwh': [2190000, 2883500, 1679000, 3120750, 2646250, 2764875, 2482000, 1642500, 2500250, 3248500, 3650000, 1596875, 1815875, 1359625, 2628000, 2354250, 7245250, 2737500, 3129875, 2016625, 1669875, 930750, 4973125, 7290875],
         'water_m3': [43800, 57670, 33580, 62415, 52925, 55298, 49640, 32850, 50005, 64970, 73000, 31938, 36318, 27193, 52560, 47085, 144905, 54750, 62598, 40333, 33398, 18615, 99463, 145818],
         'co2_tonnes': [1095, 1442, 840, 1560, 1323, 1382, 1241, 821, 1250, 1624, 1825, 798, 908, 680, 1314, 1177, 3623, 1369, 1565, 1008, 835, 465, 2487, 3645],
@@ -930,7 +934,7 @@ with tab_board:
     _orient_lbl = "📥 Input-Oriented" if getattr(dea, 'orientation', 'input') == 'input' else "📤 Output-Oriented"
     st.markdown(
         f"<div style='background:#1a3a5c;color:white;padding:10px 16px;border-radius:8px;margin-bottom:12px;'>"
-        f"<b>DEA-H v4 — Rapport Comité d'Investissement</b> &nbsp;·&nbsp; "
+        f"<b>DEA-H v3.9 — Rapport Comité d'Investissement</b> &nbsp;·&nbsp; "
         f"{dea.n} hôtels analysés &nbsp;·&nbsp; {_orient_lbl} &nbsp;·&nbsp; "
         f"{datetime.now().strftime('%d/%m/%Y')}</div>",
         unsafe_allow_html=True,
@@ -3566,21 +3570,34 @@ with tab_malm:
 
     st.markdown('---')
     st.markdown('---')
-    st.markdown('''<p class="section-title">🧪 Tobit Second Stage — Déterminants Efficience</p>''', unsafe_allow_html=True)
+    st.markdown('''<p class="section-title">🧪 Stage 2 — Déterminants de l'Efficience</p>''', unsafe_allow_html=True)
     st.caption(
-        "Régression Tobit censurée à droite en 1.0 sur les scores BCC. "
-        "Quantifie l'effet marginal de chaque variable environnementale sur l'efficience. "
-        "Réf. : Tobin (1958) Econometrica ; Simar & Wilson (2007) Journal of Econometrics."
+        "Deux estimateurs complémentaires : Tobit censuré (Tobin 1958) pour la lisibilité, "
+        "Simar-Wilson (2007) pour la robustesse statistique. "
+        "Variables financières et de saisonnalité issues de Pulina & Santoni (2018)."
     )
+
+    # ── Calcul variables dérivées Stage 2 ────────────────────────────────────
+    _s2_added = build_stage2_vars(dea)
 
     # Sélection des régresseurs disponibles
     _tobit_candidates = {
+        # Structurelles
         'classement_etoiles': 'Classement (★)',
-        'surface_m2'        : 'Surface totale (m²)',
-        'capex_annuel'      : 'CAPEX annuel (€)',
         'nb_lits'           : 'Nombre de chambres',
+        'log_nb_lits'       : 'Taille — log(nb chambres)',
+        'surface_m2'        : 'Surface totale (m²)',
+        # Financières — Pulina & Santoni (2018)
+        'ltv_proxy'         : 'Intensité capital / CA (proxy LTV %)',
+        'asset_yield'       : 'Rendement actifs CA/BV (proxy ROA)',
+        'capex_per_room'    : 'CAPEX par chambre (k€)',
+        'gop_margin_pct'    : 'Marge GOP (%)',
+        'capex_annuel'      : 'CAPEX annuel total (k€)',
+        # Saisonnalité
+        'saison_dummy'      : 'Saisonnalité (resort=1 / urbain=0)',
+        # ESG / opérationnel
         'energy_kwh'        : 'Énergie consommée (kWh)',
-        'payroll_total'     : 'Masse salariale (€)',
+        'payroll_total'     : 'Masse salariale (k€)',
     }
     _tobit_avail = {c: l for c, l in _tobit_candidates.items() if c in dea.df.columns}
 
@@ -3678,6 +3695,109 @@ with tab_malm:
             )
         elif st.session_state.get("tobit_results") and "error" in st.session_state["tobit_results"]:
             st.error(st.session_state["tobit_results"]["error"])
+
+    # ── SIMAR-WILSON (2007) ───────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown('''<p class="section-title">📐 Simar-Wilson (2007) — Régression Tronquée Bootstrappée</p>''', unsafe_allow_html=True)
+
+    with st.expander("ℹ️ Différence Tobit vs Simar-Wilson", expanded=False):
+        st.markdown("""
+| | **Tobit censuré** | **Simar-Wilson tronqué** |
+|---|---|---|
+| DMUs efficients (θ=1) | Inclus — censurés via P(Y≥1) | **Exclus** de l'estimation |
+| Biais correlation scores DEA | Non corrigé | **Corrigé** par bootstrap |
+| Standard errors | Hessien numérique | **Bootstrap paramétrique** B=200 |
+| IC 95% | Non disponible | **Percentiles 2.5/97.5** |
+| Usage recommandé | Lecture rapide, interprétation | **Publication, validation** |
+
+*Réf. : Simar & Wilson (2007) Journal of Econometrics 136(1), 31-64*
+        """)
+
+    _sw_selected = st.multiselect(
+        "Variables environnementales — Simar-Wilson",
+        options=list(_all_tobit.keys()),
+        default=list(_all_tobit.keys())[:min(4, len(_all_tobit))],
+        format_func=lambda x: _all_tobit.get(x, x),
+        key='sw_vars',
+    )
+    _sw_boot = st.slider("Itérations bootstrap (B)", 100, 500, 200, 50, key='sw_boot')
+
+    if _sw_selected and st.button("⚙️ Estimer Simar-Wilson", key="sw_btn"):
+        if len(_sw_selected) >= len(dea.hotels) - 2:
+            st.error("Trop de régresseurs. Réduisez la sélection.")
+        else:
+            with st.spinner(f"Bootstrap tronqué — {_sw_boot} itérations…"):
+                try:
+                    _sw = compute_simar_wilson(
+                        dea,
+                        env_vars=_sw_selected,
+                        env_labels=_all_tobit,
+                        n_bootstrap=_sw_boot,
+                    )
+                    st.session_state["sw_results"] = _sw
+                except Exception as _e_sw:
+                    st.error(f"Erreur Simar-Wilson : {_e_sw}")
+
+    if st.session_state.get("sw_results") and "error" not in st.session_state["sw_results"]:
+        _sw = st.session_state["sw_results"]
+        _sw_c1, _sw_c2 = st.columns([3, 1])
+        with _sw_c1:
+            st.markdown("**Résultats — Régression tronquée bootstrappée**")
+            st.dataframe(_sw["coef_df"], use_container_width=True, hide_index=True)
+            st.caption(
+                "SE Bootstrap : écart-type sur B itérations bootstrap. "
+                "IC95% : percentiles 2.5/97.5 du bootstrap. "
+                "Sig. : *** p<0.01  ** p<0.05  * p<0.10"
+            )
+        with _sw_c2:
+            st.metric("N total", _sw["n"])
+            st.metric("N inefficients utilisés", _sw["n_inefficients"])
+            st.metric("Bootstrap convergés", _sw["n_bootstrap"])
+            st.metric("Log-vraisemblance", _sw["log_lik"])
+            st.metric("σ (bruit)", _sw["sigma"])
+            st.metric("Convergence MLE", "✅ Oui" if _sw["converged"] else "⚠️ Non")
+
+        # Bar chart coefficients significatifs S-W
+        _sw_sig = _sw["coef_df"][_sw["coef_df"]["Sig."] != ""].copy()
+        _sw_sig = _sw_sig[_sw_sig["Variable"] != "Constante"]
+        if not _sw_sig.empty:
+            _sw_vals = pd.to_numeric(_sw_sig["Coeff."], errors="coerce")
+            _sw_lo   = pd.to_numeric(_sw_sig["IC95% Lo"], errors="coerce")
+            _sw_hi   = pd.to_numeric(_sw_sig["IC95% Hi"], errors="coerce")
+            fig_sw = go.Figure()
+            fig_sw.add_trace(go.Bar(
+                x=_sw_sig["Variable"], y=_sw_vals,
+                marker=dict(color=["#27ae60" if v > 0 else "#e74c3c" for v in _sw_vals]),
+                error_y=dict(
+                    type='data', symmetric=False,
+                    array=(_sw_hi - _sw_vals).tolist(),
+                    arrayminus=(_sw_vals - _sw_lo).tolist(),
+                    color='rgba(0,0,0,0.4)', thickness=2,
+                ),
+                text=[f"{v:+.3f}{s}" for v, s in zip(_sw_vals, _sw_sig["Sig."])],
+                textposition="outside",
+            ))
+            fig_sw.add_hline(y=0, line_color="gray", line_width=1)
+            fig_sw.update_layout(
+                title="Coefficients Simar-Wilson significatifs + IC95% bootstrap",
+                yaxis=dict(title="Effet marginal sur BCC", zeroline=True),
+                height=380, paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_sw, use_container_width=True)
+
+        st.info(
+            "**Lecture investisseur :** Un coefficient négatif sur *Saisonnalité* confirme que "
+            "les actifs resort sont structurellement moins efficients (sous-utilisation hors saison). "
+            "Un coefficient positif sur *Rendement actifs* valide que les hôtels générant plus "
+            "de CA par € immobilisé atteignent une meilleure efficience opérationnelle. "
+            "Ces signaux guident la décision de repositionnement ou de cession."
+        )
+
+    elif st.session_state.get("sw_results") and "error" in st.session_state["sw_results"]:
+        st.error(st.session_state["sw_results"]["error"])
+
+    if "sw_results" not in st.session_state:
+        st.session_state["sw_results"] = None
 
 
 # TAB 12 — SYNTHÈSE MULTI-MODULE (v3.2)
@@ -3856,7 +3976,7 @@ st.markdown("---")
 st.markdown("---")
 st.markdown(
     """<div style='text-align:center;color:#94a3b8;font-size:0.75rem;line-height:1.8;padding:0.5rem 0;'>
-    <b>DEA-H v4 · REIV Hospitality · Mehdi Sayyou</b><br>
+    <b>DEA-H v3.9 · REIV Hospitality · Mehdi Sayyou</b><br>
     Modèles : BCC/CCR Input/Output-Oriented · TOPSIS Shannon entropy · K-means · Metafrontière GTE/MTE/TGR ·
     Malmquist TFP (Catch-up × Frontier Shift) · Tobit Second Stage · Multi-Module DEA (7 dimensions)<br>
     <b>Références :</b>
