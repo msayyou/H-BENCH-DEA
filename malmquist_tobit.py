@@ -538,3 +538,248 @@ def mann_whitney_groups(dea, groups: pd.Series) -> dict:
             for g, s in grp_scores.items()
         ]).sort_values('Moy. BCC', ascending=False),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BUILD STAGE 2 VARIABLES — FINANCIER + SAISONNALITÉ
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_stage2_vars(dea) -> list:
+    """
+    Calcule les variables environnementales dérivées pour le Stage 2 (Tobit / Simar-Wilson).
+    Injecte directement dans dea.df. Retourne liste des colonnes créées.
+
+    Variables ajoutées :
+      ltv_proxy      : CAPEX annuel / CA total × 100  — intensité capital (proxy LTV)
+      asset_yield    : CA total / Book value assets    — rendement actifs (proxy ROA)
+      capex_per_room : CAPEX annuel / nb_lits          — CAPEX par chambre (k€)
+      gop_margin_pct : GOP / CA total × 100            — marge opérationnelle
+      log_nb_lits    : log(nb_lits)                   — effet taille (log-linéaire)
+
+    Réf. : Pulina & Santoni (2018) Tourism Economics
+           Simar & Wilson (2007) Journal of Econometrics
+    """
+    df  = dea.df
+    added = []
+
+    # 1. LTV proxy — intensité capital / dette implicite
+    if 'capex_annuel' in df.columns and 'total_revenue' in df.columns:
+        _tr = df['total_revenue'].replace(0, np.nan)
+        df['ltv_proxy'] = (df['capex_annuel'] / _tr * 100).round(2)
+        added.append('ltv_proxy')
+
+    # 2. Asset yield — retour sur actifs (ROA proxy)
+    if 'total_revenue' in df.columns and 'book_value_assets' in df.columns:
+        _bv = df['book_value_assets'].replace(0, np.nan)
+        df['asset_yield'] = (df['total_revenue'] / _bv).round(4)
+        added.append('asset_yield')
+
+    # 3. CAPEX par chambre
+    if 'capex_annuel' in df.columns and 'nb_lits' in df.columns:
+        _lits = df['nb_lits'].replace(0, np.nan)
+        df['capex_per_room'] = (df['capex_annuel'] / _lits).round(2)
+        added.append('capex_per_room')
+
+    # 4. Marge GOP %
+    if 'gop' in df.columns and 'total_revenue' in df.columns:
+        _tr = df['total_revenue'].replace(0, np.nan)
+        df['gop_margin_pct'] = (df['gop'] / _tr * 100).round(2)
+        added.append('gop_margin_pct')
+
+    # 5. Log taille
+    if 'nb_lits' in df.columns:
+        df['log_nb_lits'] = np.log(df['nb_lits'].replace(0, np.nan).astype(float)).round(4)
+        added.append('log_nb_lits')
+
+    return added
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SIMAR & WILSON (2007) — RÉGRESSION TRONQUÉE BOOTSTRAPPÉE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _sw_truncated_loglik(params: np.ndarray, y: np.ndarray,
+                         X: np.ndarray, upper: float = 1.0) -> float:
+    """
+    Log-vraisemblance régression tronquée normale (tronquée à droite en `upper`).
+    Signe négatif pour minimisation.
+    f(y|X) = φ((y-Xβ)/σ) / [σ·Φ((upper-Xβ)/σ)]
+    Réf. : Simar & Wilson (2007) eq. (4)
+    """
+    beta  = params[:-1]
+    sigma = max(abs(params[-1]), 1e-6)
+    mu    = X @ beta
+    resid = (y - mu) / sigma
+    trunc = stats.norm.cdf((upper - mu) / sigma)
+    trunc = np.maximum(trunc, 1e-10)
+    ll    = np.sum(-np.log(sigma) + stats.norm.logpdf(resid) - np.log(trunc))
+    return -ll
+
+
+def _fit_sw(y: np.ndarray, X: np.ndarray,
+            upper: float = 1.0, p0: np.ndarray | None = None):
+    """MLE régression tronquée. Retourne (beta, sigma, success, log_lik)."""
+    k = X.shape[1]
+    if p0 is None:
+        p0       = np.zeros(k + 1)
+        p0[0]    = float(np.mean(y))
+        p0[-1]   = max(float(np.std(y)), 0.05)
+    res = optimize.minimize(
+        _sw_truncated_loglik, p0, args=(y, X, upper),
+        method='Nelder-Mead',
+        options={'maxiter': 15000, 'xatol': 1e-8, 'fatol': 1e-8},
+    )
+    beta_hat  = res.x[:-1]
+    sigma_hat = max(abs(res.x[-1]), 1e-6)
+    return beta_hat, sigma_hat, res.success, -res.fun
+
+
+def compute_simar_wilson(
+    dea,
+    env_vars   : list,
+    env_labels : dict | None = None,
+    n_bootstrap: int  = 200,
+) -> dict:
+    """
+    Simar & Wilson (2007) Algorithm 1 — Régression tronquée bootstrappée.
+
+    Différences vs Tobit censuré :
+    ┌─────────────────────────────────────────────────────┐
+    │ Tobit        : CENSURE les DMUs efficients (θ=1)   │
+    │               → les inclut via P(Y≥1) dans L       │
+    │ Simar-Wilson : TRONQUE — exclut θ=1 de l'estimation│
+    │               → corrige la corrélation des scores  │
+    │               via bootstrap paramétrique           │
+    └─────────────────────────────────────────────────────┘
+
+    Bootstrap (B itérations) :
+      1. Génère θ*_i ~ N(Zβ̂, σ̂²) tronquée à droite en 1
+         pour TOUS les DMUs
+      2. Ré-estime régression tronquée sur {θ*_i < 1}
+      3. SE = σ(β*_b) ; IC95% = percentiles 2.5 / 97.5
+
+    n_bootstrap=200 recommandé (Simar & Wilson 2007, p.48)
+
+    Réf. : Simar L. & Wilson P.W. (2007)
+           Journal of Econometrics 136(1), 31-64.
+    """
+    from scipy.stats import truncnorm as _tnorm
+
+    if env_labels is None:
+        env_labels = {}
+
+    # ── Données ──────────────────────────────────────────────────────────────
+    valid = [h for h in dea.hotels if all(
+        c in dea.df.columns and not pd.isna(dea.df.loc[h, c])
+        for c in env_vars
+    )]
+    if len(valid) < len(env_vars) + 3:
+        return {'error': f'Trop peu d\'observations valides ({len(valid)}) '
+                         f'pour {len(env_vars)} régresseurs.'}
+
+    y_all = np.array([dea.bcc_scores[h] for h in valid])
+    Z_raw = np.column_stack([dea.df.loc[valid, c].values.astype(float)
+                             for c in env_vars])
+
+    # Normalisation
+    Z_means = Z_raw.mean(axis=0);  Z_stds = Z_raw.std(axis=0)
+    Z_stds[Z_stds == 0] = 1.0
+    Z_norm = (Z_raw - Z_means) / Z_stds
+    Z_fit  = np.column_stack([np.ones(len(valid)), Z_norm])
+
+    # ── Step 1 : Régression tronquée initiale (θ < 1 seulement) ─────────────
+    mask_ineff = y_all < 1.0 - 1e-8
+    n_ineff    = int(mask_ineff.sum())
+    if n_ineff < len(env_vars) + 2:
+        return {'error': f'Trop peu de DMUs inefficients ({n_ineff}) '
+                         f'pour l\'estimation tronquée (besoin ≥ {len(env_vars)+2}).'}
+
+    y_trunc = y_all[mask_ineff]
+    X_trunc = Z_fit[mask_ineff]
+    beta_hat, sigma_hat, converged, log_lik = _fit_sw(y_trunc, X_trunc)
+    mu_all  = Z_fit @ beta_hat
+
+    # ── Step 2 : Bootstrap Algorithm 1 ───────────────────────────────────────
+    rng        = np.random.default_rng(42)
+    boot_betas = []
+    p0_b       = np.append(beta_hat, sigma_hat)
+
+    for _ in range(n_bootstrap):
+        # Générer θ* pour TOUS les DMUs — N(μ_i, σ²) tronquée droite à 1
+        theta_star = np.empty(len(valid))
+        for i in range(len(valid)):
+            mu_i    = float(mu_all[i])
+            b_upper = (1.0 - mu_i) / sigma_hat
+            a_lower = max(-10.0, (-mu_i) / sigma_hat)  # borne inférieure ≈ 0
+            try:
+                theta_star[i] = _tnorm.rvs(
+                    a_lower, b_upper, loc=mu_i, scale=sigma_hat,
+                    random_state=rng,
+                )
+            except Exception:
+                theta_star[i] = min(max(mu_i, 1e-4), 0.9999)
+
+        # Ré-estimer sur {θ* < 1}
+        mask_b = theta_star < 1.0 - 1e-8
+        if mask_b.sum() < len(env_vars) + 2:
+            continue
+        try:
+            beta_b, _, _, _ = _fit_sw(theta_star[mask_b], Z_fit[mask_b], p0=p0_b)
+            boot_betas.append(beta_b)
+        except Exception:
+            continue
+
+    if not boot_betas:
+        return {'error': 'Bootstrap échoué — aucune itération n\'a convergé.'}
+
+    boot_arr  = np.array(boot_betas)           # (B, k)
+    boot_se   = boot_arr.std(axis=0)
+    ci_lo     = np.percentile(boot_arr, 2.5,  axis=0)
+    ci_hi     = np.percentile(boot_arr, 97.5, axis=0)
+
+    # ── Dé-normalisation ──────────────────────────────────────────────────────
+    k      = Z_fit.shape[1]
+    labels = ['Constante'] + [env_labels.get(c, c) for c in env_vars]
+
+    def _denorm(arr):
+        out = arr.copy()
+        for i in range(1, k):
+            out[i] /= Z_stds[i - 1]
+        return out
+
+    beta_dn  = _denorm(beta_hat)
+    se_dn    = _denorm(boot_se)
+    ci_lo_dn = _denorm(ci_lo)
+    ci_hi_dn = _denorm(ci_hi)
+
+    t_stats = np.where(se_dn > 1e-10, beta_dn / se_dn, np.nan)
+    p_vals  = np.where(np.isnan(t_stats), np.nan,
+                       2 * (1 - stats.norm.cdf(np.abs(t_stats))))
+
+    def stars(p):
+        if np.isnan(p): return ''
+        return '***' if p < 0.01 else '**' if p < 0.05 else '*' if p < 0.10 else ''
+
+    coef_df = pd.DataFrame({
+        'Variable'     : labels,
+        'Coeff.'       : [round(b, 4) for b in beta_dn],
+        'SE Bootstrap' : [round(s, 4) for s in se_dn],
+        'IC95% Lo'     : [round(lo, 4) for lo in ci_lo_dn],
+        'IC95% Hi'     : [round(hi, 4) for hi in ci_hi_dn],
+        't-stat'       : [round(t, 2) if not np.isnan(t) else '—' for t in t_stats],
+        'p-value'      : [round(p, 4) if not np.isnan(p) else '—' for p in p_vals],
+        'Sig.'         : [stars(p) for p in p_vals],
+        'Effet'        : [('↑ améliore efficience' if b > 0 else '↓ réduit efficience')
+                          if l != 'Constante' else '—'
+                          for b, l in zip(beta_dn, labels)],
+    })
+
+    return {
+        'coef_df'        : coef_df,
+        'n'              : len(valid),
+        'n_inefficients' : n_ineff,
+        'n_bootstrap'    : len(boot_betas),
+        'log_lik'        : round(log_lik, 4),
+        'sigma'          : round(sigma_hat, 4),
+        'converged'      : bool(converged),
+    }
