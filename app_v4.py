@@ -620,8 +620,11 @@ with st.sidebar:
 
     st.markdown("---")
     uploaded_file = st.file_uploader(
-        "CSV : hotel_name (index), nb_lits, nb_employes, couts_op_ex, revpar, satisfaction, taux_occupation",
-        type=['csv'],
+        "Excel ou CSV : hotel_name (1re colonne), nb_lits, nb_employes, "
+        "couts_op_ex, revpar, satisfaction, taux_occupation",
+        type=['xlsx', 'xls', 'csv'],
+        help="Excel recommandé — évite les erreurs de séparateur et les virgules "
+             "dans les noms d'hôtels.",
     )
     use_sample = st.checkbox("📋 Données d'exemple — Meliá Group Espagne (24 hôtels)", value=(uploaded_file is None))
 
@@ -680,10 +683,55 @@ def load_sample() -> pd.DataFrame:
     return pd.DataFrame(d).set_index('hotel_name')
 
 if uploaded_file is not None:
-    import io
-    raw = uploaded_file.read().decode('utf-8', errors='replace')
-    sep = ';' if raw.count(';') > raw.count(',') else ','
-    df = pd.read_csv(io.StringIO(raw), index_col=0, sep=sep)
+    import io, csv as _csv
+    _fname   = (uploaded_file.name or '').lower()
+    _is_xlsx = _fname.endswith(('.xlsx', '.xls'))
+
+    if _is_xlsx:
+        # ── Excel : pas de séparateur, pas de BOM, pas d'ambiguïté virgule ──
+        try:
+            df = pd.read_excel(uploaded_file, index_col=0)
+        except Exception as _e:
+            st.sidebar.error(f"❌ Lecture Excel impossible : {_e}")
+            st.sidebar.caption(
+                "Vérifiez que la 1re feuille contient les données, "
+                "l'en-tête en ligne 1 et hotel_name en colonne A."
+            )
+            st.stop()
+        sep = 'Excel'
+    else:
+        # utf-8-sig retire le BOM Excel (sinon 1re colonne = '﻿hotel_name')
+        raw = uploaded_file.read().decode('utf-8-sig', errors='replace')
+        raw = raw.replace('\r\n', '\n').replace('\r', '\n')   # normalise CRLF Windows
+        sep = ';' if raw.count(';') > raw.count(',') else ','
+
+        # ── Contrôle d'intégrité : lignes au nombre de champs incohérent ─────
+        # Cause fréquente : nom d'hôtel contenant une virgule sans guillemets
+        # ex. The Hoxton, Paris  →  doit s'écrire  "The Hoxton, Paris"
+        _rows      = list(_csv.reader(io.StringIO(raw), delimiter=sep))
+        _rows      = [r for r in _rows if any(str(c).strip() for c in r)]
+        _n_head    = len(_rows[0]) if _rows else 0
+        _bad_lines = [(i + 2, len(r), r[0] if r else '')
+                      for i, r in enumerate(_rows[1:]) if len(r) != _n_head]
+        if _bad_lines:
+            st.sidebar.error(
+                f"❌ {len(_bad_lines)} ligne(s) mal formée(s) — "
+                f"l'en-tête a {_n_head} colonnes."
+            )
+            for _ln, _nf, _first in _bad_lines[:5]:
+                st.sidebar.caption(f"• Ligne {_ln} : {_nf} champs — commence par « {_first} »")
+            st.sidebar.warning(
+                "Cause la plus fréquente : un nom d'hôtel contient une virgule "
+                "non protégée. Entourez-le de guillemets, ex. \"The Hoxton, Paris\", "
+                "utilisez « ; » comme séparateur — ou déposez un fichier Excel."
+            )
+            st.stop()
+
+        df = pd.read_csv(io.StringIO(raw), index_col=0, sep=sep, skipinitialspace=True)
+
+    df.index = df.index.astype(str).str.strip()
+    df.columns = [str(c).strip() for c in df.columns]
+
     missing_cols = [c for c in NUMERIC_COLS if c not in df.columns]
     if missing_cols:
         st.sidebar.error(f"❌ Colonnes manquantes : {', '.join(missing_cols)}")
@@ -691,8 +739,31 @@ if uploaded_file is not None:
         st.stop()
     for col in NUMERIC_COLS:
         df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    _n_before = len(df)
     df = df.dropna(subset=NUMERIC_COLS)
-    st.sidebar.success(f"✅ {len(df)} hôtels chargés (séparateur : '{sep}')")
+    _n_dropped = _n_before - len(df)
+
+    if len(df) < 3:
+        st.sidebar.error(
+            f"❌ Seulement {len(df)} hôtel(s) exploitable(s) sur {_n_before} lignes lues. "
+            "Le DEA exige au minimum 3 unités."
+        )
+        st.sidebar.caption(
+            "Vérifiez que les colonnes numériques ne contiennent ni texte, "
+            "ni cellule vide, ni séparateur décimal « , » (utilisez « . »)."
+        )
+        st.stop()
+
+    st.sidebar.success(
+        f"✅ {len(df)} hôtels chargés"
+        + ("  ·  format Excel" if _is_xlsx else f"  ·  séparateur '{sep}'")
+    )
+    if _n_dropped > 0:
+        st.sidebar.warning(
+            f"⚠️ {_n_dropped} ligne(s) écartée(s) — valeur non numérique ou manquante "
+            f"dans : {', '.join(NUMERIC_COLS)}"
+        )
 
     # ── Détection valeurs négatives ou nulles (Pastor 1996 / Tone 2001) ──────
     _neg_issues = []
@@ -2585,10 +2656,13 @@ with tab_capital:
     if not has_any:
         st.info("👆 Renseignez surface_m2, CAPEX et GOP dans le tableau ci-dessus pour les analyses capital.")
 
+    # Initialisation systématique — les sections avales (Expense Flex, Flow Through)
+    # référencent cap_rows même quand le tableau capital n'est pas encore rempli
+    cap_rows = []
+
     if has_any:
-    
+
         st.markdown("---")
-        cap_rows = []
         for hotel in dea.hotels:
             row      = cap_input.loc[hotel]
             surf     = float(row['surface_m2']); capex_ke = float(row['capex_annuel (k€)'])
@@ -2912,16 +2986,23 @@ with tab_capital:
                 file_name="deah_mdea_room_fb.csv", mime="text/csv",
             )
 
-    # Expense Flex (Russo & Legel p.33)
+    # Expense Flex (Russo & Legel p.33) — requiert le tableau capital renseigné
+    if not cap_rows:
+        st.markdown("---")
+        st.info(
+            "💡 **Expense Flex & Flow Through** — renseignez surface, CAPEX et GOP "
+            "dans le tableau ci-dessus pour débloquer cette analyse."
+        )
+    else:
         st.markdown('<p class="section-title">Expense Flex & Flow Through</p>', unsafe_allow_html=True)
         st.caption('Flow Through = delta_GOP / delta_CA | Expense Flex = 1 - FT quand CA baisse | Cible standard 50%')
-    
+
         col_fx1, col_fx2 = st.columns(2)
         with col_fx1:
             base_revpar_ft = st.number_input('RevPAR baseline N-1 ou Budget (e)', value=0.0, step=1.0, key='ft_revpar')
         with col_fx2:
             base_gop_pct_ft = st.number_input('Marge GOP% baseline (%)', value=35.0, step=0.5, key='ft_gop')
-    
+
         flex_rows = []
         for r in cap_rows:
             hotel_ft = r['Hôtel']
