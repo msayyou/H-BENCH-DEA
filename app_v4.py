@@ -2528,10 +2528,10 @@ with tab_capital:
     init_data = {}
     for hotel in dea.hotels:
         row = {
-            'surface_m2'        : float(dea.df.loc[hotel, 'surface_m2'])        if getattr(dea,'has_surface',False) else 0.0,
-            'capex_annuel (k€)' : float(dea.df.loc[hotel, 'capex_annuel'])      if getattr(dea,'has_capex',  False) else 0.0,
-            'gop (k€)'          : float(dea.df.loc[hotel, 'gop'])               if getattr(dea,'has_gop',    False) else 0.0,
-            'classement (★)'    : int(dea.df.loc[hotel, 'classement_etoiles'])  if getattr(dea,'has_stars',  False) else 3,
+            'surface_m2'        : float(dea.df.loc[hotel, 'surface_m2'])        if (getattr(dea,'has_surface',False) and 'surface_m2'         in dea.df.columns) else 0.0,
+            'capex_annuel (k€)' : float(dea.df.loc[hotel, 'capex_annuel'])      if (getattr(dea,'has_capex',  False) and 'capex_annuel'         in dea.df.columns) else 0.0,
+            'gop (k€)'          : float(dea.df.loc[hotel, 'gop'])               if (getattr(dea,'has_gop',    False) and 'gop'                  in dea.df.columns) else 0.0,
+            'classement (★)'    : int(dea.df.loc[hotel, 'classement_etoiles'])  if (getattr(dea,'has_stars',  False) and 'classement_etoiles'   in dea.df.columns) else 3,
         }
         init_data[hotel] = row
     df_init = pd.DataFrame(init_data).T
