@@ -2259,12 +2259,14 @@ with tab_kpi:
         st.plotly_chart(fig_hist, use_container_width=True)
     with col2:
         sorted_hotels = sorted(hotels_list, key=lambda h: dea.bcc_scores[h])
-        colors = ['#27ae60' if dea.bcc_scores[h] >= 0.95
-                  else '#f39c12' if dea.bcc_scores[h] >= 0.85 else '#e74c3c'
-                  for h in sorted_hotels]
+        # NB : ne pas nommer cette variable `colors` — elle écraserait
+        # reportlab.lib.colors au niveau module et casserait le rapport PDF
+        _bar_colors_bcc = ['#27ae60' if dea.bcc_scores[h] >= 0.95
+                           else '#f39c12' if dea.bcc_scores[h] >= 0.85 else '#e74c3c'
+                           for h in sorted_hotels]
         fig_bars = go.Figure(go.Bar(
             x=[dea.bcc_scores[h] for h in sorted_hotels], y=sorted_hotels,
-            orientation='h', marker_color=colors, opacity=0.85,
+            orientation='h', marker_color=_bar_colors_bcc, opacity=0.85,
         ))
         fig_bars.update_layout(
             title="Scores BCC par hôtel", xaxis=dict(range=[0, 1.05], tickformat='.0%'),
