@@ -1135,7 +1135,15 @@ with tab_board:
     st.caption("Rapport comité : couverture · KPIs · Top TOPSIS · Hôtels critiques.")
     _rpc1, _rpc2 = st.columns([3, 1])
     with _rpc1:
-        top_n_portfolio = st.slider("Hôtels dans le Top", 3, min(20, dea.n), min(10, dea.n), key="top_n_slider")
+        # Garde-fou : petit portefeuille (n < 4) → slider impossible (min > max)
+        _tn_max = min(20, dea.n)
+        if _tn_max <= 3:
+            top_n_portfolio = dea.n
+            st.caption(f"Portefeuille de {dea.n} hôtels — Top complet inclus.")
+        else:
+            top_n_portfolio = st.slider(
+                "Hôtels dans le Top", 3, _tn_max,
+                min(10, _tn_max), key="top_n_slider")
     with _rpc2:
         if st.button("📊 Générer", key="portfolio_pdf_btn", type="primary"):
             with st.spinner("Génération PDF..."):
