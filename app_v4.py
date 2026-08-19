@@ -269,7 +269,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                                   jours_exploit: int = 365,
                                   ft_pct: float = 0.50,
                                   avg_salary: float = 35_000,
-                                  portfolio_name: str = "") -> bytes:
+                                  portfolio_name: str = "",
+                                  thresholds: dict = None) -> bytes:
     """
     Rapport PDF portfolio — document de comité d'investissement.
 
@@ -281,6 +282,17 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     """
     if not REPORTLAB_AVAILABLE:
         return b""
+
+    # Seuils d'interprétation — conventions sectorielles par défaut,
+    # recalibrables depuis la barre latérale de l'application
+    _TH = {'crit': 0.85, 'ft_norm': 0.50, 'ft_low': 0.40, 'sbm': 0.15,
+           'tgr': 0.15, 'goppam': 2.5, 'rgi': 100}
+    if thresholds:
+        _TH.update({k: v for k, v in thresholds.items() if v is not None})
+    _TH_CUSTOM = bool(thresholds) and any(
+        abs(_TH[k] - d) > 1e-9 for k, d in
+        {'crit': .85, 'ft_norm': .50, 'ft_low': .40, 'sbm': .15,
+         'tgr': .15, 'goppam': 2.5, 'rgi': 100}.items())
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
@@ -303,6 +315,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                     alignment=TA_CENTER, spaceAfter=7)
     h1_s   = S("H1", fontSize=13,  textColor=NAVY, fontName="Helvetica-Bold",
                spaceBefore=14, spaceAfter=3)
+    h2_s   = S("H2", fontSize=10,  textColor=NAVY, fontName="Helvetica-Bold",
+               spaceBefore=8,  spaceAfter=3)
     meth_s = S("ME", fontSize=7.6, textColor=colors.HexColor("#4a5568"),
                fontName="Helvetica-Oblique", spaceAfter=6, leading=10)
     body_s = S("B",  fontSize=8.3, textColor=colors.black, fontName="Helvetica",
@@ -359,6 +373,29 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             ("BOTTOMPADDING",(0,0),(-1,-1), 6),
         ]))
         return box
+
+    # ── Registre de signaux : alimenté par chaque section au fil du rapport ──
+    # Permet à la synthèse finale de croiser les diagnostics, au lieu de laisser
+    # chaque section raisonner isolément.
+    _sig_reg = {h: set() for h in dea.hotels}
+    _SIGLAB = {
+        'critique'    : "Efficience critique",
+        'double_peine': "Gestion + taille",
+        'sbm_masque'  : "Inefficience masquée",
+        'capital_bas' : "Capital sous-productif",
+        'ft_faible'   : "Conversion faible",
+        'recul'       : "En recul vs N-1",
+        'sous_marche' : "Sous son marché",
+    }
+    def _sig(h, k):
+        if h in _sig_reg:
+            _sig_reg[h].add(k)
+
+    for _h in dea.hotels:
+        if dea.bcc_scores.get(_h, 1) < _TH['crit']:
+            _sig(_h, 'critique')
+        if dea.quadrants.get(_h) == 'Q4':
+            _sig(_h, 'double_peine')
 
     story = []
 
@@ -417,7 +454,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
 
     avg_bcc   = sum(dea.bcc_scores.values()) / len(dea.bcc_scores)
     n_eff     = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
-    n_crit    = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
+    n_crit    = sum(1 for s in dea.bcc_scores.values() if s < _TH['crit'])
     avg_scale = sum(dea.scale_efficiency.values()) / len(dea.scale_efficiency)
     _pct_eff  = n_eff / dea.n
 
@@ -426,7 +463,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             "Marge de progression moyenne sur la gestion courante"],
            ["Hôtels sur la frontière", f"{n_eff} / {dea.n}",
             "Actifs servant de référence — aucun pair ne fait mieux"],
-           ["Hôtels critiques (BCC < 85%)", f"{n_crit} / {dea.n}",
+           [f"Hôtels critiques (BCC < {_TH['crit']:.0%})", f"{n_crit} / {dea.n}",
             "Plan d'action prioritaire"],
            ["Efficacité d'échelle moyenne", f"{avg_scale:.1%}",
             "Adéquation de la taille au marché desservi"]]
@@ -445,6 +482,23 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             f"{_pct_eff:.0%} des actifs sont efficients — le modèle discrimine peu. "
             "Réduire le nombre de variables ou élargir l'échantillon renforcerait le "
             "pouvoir de séparation (Vía et al., 2013)."))
+    else:
+        _gap_moy = 1 - avg_bcc
+        story.append(_lecture(
+            f"{_pct_eff:.0%} des actifs définissent la frontière — le modèle discrimine "
+            "correctement, ni concentré sur un actif atypique ni trop permissif. "
+            f"L'écart moyen à la frontière s'établit à {_gap_moy:.0%} : c'est la marge "
+            "de progression théorique du portefeuille si chaque actif rejoignait les "
+            "pratiques de ses pairs les mieux placés. "
+            + ("L'efficacité d'échelle moyenne, plus faible que l'efficience de gestion, "
+               "indique que le dimensionnement pèse davantage que l'exploitation — un "
+               "levier d'arbitrage plus que de management."
+               if avg_scale < avg_bcc - 0.05 else
+               "L'efficience de gestion est le facteur limitant, davantage que le "
+               "dimensionnement des actifs — les leviers sont opérationnels."
+               if avg_bcc < avg_scale - 0.05 else
+               "Gestion et dimensionnement contribuent à parts comparables aux écarts "
+               "observés.")))
 
     # ══════════════════ QUADRANTS ══════════════════
     story.append(Paragraph("2. Quadrants — gestion pure x efficacité d'échelle", h1_s))
@@ -544,6 +598,25 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                 "atypique au point de ne plus être comparable au reste du portefeuille — "
                 "auquel cas il fausse tous les autres scores. Andersen &amp; Petersen "
                 "recommandent d'examiner ces cas comme des <i>outliers</i> potentiels."))
+        else:
+            _fr = [r for _, r in se_df.iterrows()
+                   if isinstance(r['Super-Efficience'], (int, float))
+                   and dea.bcc_scores.get(r['Hôtel'], 0) >= 0.999
+                   and r['Super-Efficience'] < 1.05]
+            story.append(_lecture(
+                (f"Aucun actif ne dépasse 1,5 : les références du portefeuille ont des "
+                 "avantages mesurés, sans domination excessive. Les scores des autres "
+                 "actifs ne sont donc pas distordus par un cas atypique. "
+                 if isinstance(_ls, (int, float)) else "")
+                + (f"En revanche, {len(_fr)} actif(s) efficient(s) affichent une "
+                   "super-efficience proche de 1 : leur position sur la frontière tient "
+                   "à peu de chose et peut basculer à la première variation "
+                   "d'exploitation. Ce sont des références fragiles, à ne pas ériger en "
+                   "modèle interne sans vérification."
+                   if _fr else
+                   "Les actifs efficients disposent tous d'une marge de sécurité — leur "
+                   "position sur la frontière est robuste et ils peuvent servir de "
+                   "référence interne.")))
     except Exception as _e:
         story.append(Paragraph(f"Super-efficience non calculable ({_clean(_e, 90)}).", body_s))
 
@@ -566,22 +639,39 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             if rho is None:
                 continue
             gap = bcc - rho
+            if gap >= _TH['sbm']:
+                _sig(h, 'sbm_masque')
             gaps.append((h, gap, bcc, rho))
         gaps.sort(key=lambda x: -x[1])
         sd2 = [["Hôtel", "BCC (radial)", "SBM (non radial)", "Écart", "Signal"]]
         for h, gap, bcc, rho in gaps[:12]:
-            sig = ("Inefficience masquée" if gap >= 0.15 else
+            sig = ("Inefficience masquée" if gap >= _TH['sbm'] else
                    "Écart modéré"          if gap >= 0.05 else
                    "Diagnostics cohérents")
             sd2.append([_clean(h, 38), f"{bcc:.1%}", f"{rho:.1%}", f"{gap:+.1%}", sig])
         story.append(_tbl(sd2, [6.2*cm, 2.5*cm, 2.9*cm, 1.9*cm, 3.9*cm],
                           align_right=[1, 2, 3]))
-        if gaps and gaps[0][1] >= 0.15:
+        _n_masq = sum(1 for _, g, _, _ in gaps if g >= _TH['sbm'])
+        if gaps and gaps[0][1] >= _TH['sbm']:
             story.append(_lecture(
                 f"{_clean(gaps[0][0])} perd {gaps[0][1]:.0%} entre le score radial et le "
                 "score SBM. L'écart signale une inefficience concentrée sur un ou deux "
                 "postes spécifiques plutôt qu'une sous-performance générale — donc un "
-                "levier ciblé, identifiable dans la section Slacks."))
+                "levier ciblé, identifiable dans la section Slacks."
+                + (f" {_n_masq} actifs au total dépassent le seuil de "
+                   f"{_TH['sbm']*100:.0f} points : le score radial flatte "
+                   "systématiquement ce portefeuille, et les décisions fondées sur lui "
+                   "seul sous-estiment le potentiel d'amélioration."
+                   if _n_masq >= 3 else "")))
+        elif gaps:
+            _gm = sum(g for _, g, _, _ in gaps) / len(gaps)
+            story.append(_lecture(
+                f"Écart moyen BCC-SBM de {_gm*100:.1f} points, sous le seuil de "
+                f"{_TH['sbm']*100:.0f} retenu. Les deux mesures convergent : les scores "
+                "radiaux ne masquent pas d'inefficience localisée, et les écarts observés "
+                "sont bien répartis sur l'ensemble des postes plutôt que concentrés sur "
+                "un poste unique. Les plans d'action peuvent s'appuyer sur les scores BCC "
+                "sans correction."))
     except Exception as _e:
         story.append(Paragraph(f"SBM non calculable ({_clean(_e, 90)}).", body_s))
 
@@ -611,7 +701,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     }
     def _vl(c):  return _VARLAB.get(c, str(c).replace('_', ' ').capitalize())
 
-    crit = sorted([h for h in dea.hotels if dea.bcc_scores[h] < 0.85],
+    crit = sorted([h for h in dea.hotels if dea.bcc_scores[h] < _TH['crit']],
                   key=lambda x: dea.bcc_scores[x])
     _in_cols  = list(getattr(dea, 'input_cols',  []))
     _out_cols = list(getattr(dea, 'output_cols', []))
@@ -685,8 +775,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                 "objectifs budgétaires."))
     else:
         story.append(Paragraph(
-            "Aucun actif sous le seuil de 85 % — le portefeuille est homogène en gestion "
-            "courante.", body_s))
+            f"Aucun actif sous le seuil de {_TH['crit']:.0%} — le portefeuille est homogène "
+            "en gestion courante.", body_s))
 
     story.append(PageBreak())
 
@@ -743,7 +833,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                    "souffre d'une contrainte structurelle — positionnement, marché ou "
                    "configuration d'actif — que le management seul ne peut compenser. "
                    "L'arbitrage relève du comité d'investissement, pas de l'exploitation."
-                   if _spread >= 15 else
+                   if _spread >= _TH['tgr']*100 else
                    "Cet écart reste contenu : les segments partagent une technologie de "
                    "production proche, et les écarts observés relèvent principalement de "
                    "la qualité d'exploitation — donc actionnables sans capital.")))
@@ -859,15 +949,15 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             + ("  Variables sélectionnées automatiquement parmi celles disponibles dans "
                "le fichier ; l'onglet Stage 2 permet de choisir un autre jeu."
                if _sw_auto else ""), small_s))
-        _sig = [r for _, r in cdf.iterrows()
+        _sw_sig_rows = [r for _, r in cdf.iterrows()
                 if isinstance(r.get('p-value'), (int, float)) and r['p-value'] < 0.05
                 and str(r.get('Variable', '')).lower() != 'constante']
-        if _sig:
+        if _sw_sig_rows:
             _desc = "; ".join(
                 f"{_clean(_swl(r['Variable']))} ({'+' if r.get('Coeff.', 0) > 0 else '-'})"
-                for r in _sig[:3])
+                for r in _sw_sig_rows[:3])
             story.append(_lecture(
-                f"{len(_sig)} déterminant(s) ressortent au seuil de 5 % : {_desc}. "
+                f"{len(_sw_sig_rows)} déterminant(s) ressortent au seuil de 5 % : {_desc}. "
                 "Un coefficient est exploitable lorsque son intervalle de confiance à "
                 "95 % exclut zéro ; signe positif, la variable améliore l'efficience. "
                 "Ce sont des <b>corrélations conditionnelles</b>, pas des relations "
@@ -988,14 +1078,32 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                 f"{min(_gv):.0f} à {max(_gv):.0f} €/m²."
                 + (f" Marge GOP moyenne : {sum(_mv)/len(_mv):.1f} %." if _mv else ""),
                 body_s))
-            if max(_gv) / max(min(_gv), 1e-9) > 2.5:
+            _ampl = max(_gv) / max(min(_gv), 1e-9)
+            if _ampl > _TH['goppam']:
                 story.append(_lecture(
-                    "L'amplitude du GOPPAM dépasse un facteur 2,5 au sein du portefeuille. "
+                    f"L'amplitude du GOPPAM atteint un facteur {_ampl:.1f}x au sein du "
+                    f"portefeuille, au-delà du seuil de {_TH['goppam']:.1f}x retenu. "
                     "Un tel écart tient rarement à la seule qualité d'exploitation : il "
                     "reflète des positionnements et des configurations d'actifs "
                     "hétérogènes. Les actifs du bas de tableau immobilisent une surface "
                     "que leur GOP ne rentabilise pas — piste de reconversion partielle ou "
                     "de cession."))
+            else:
+                story.append(_lecture(
+                    f"L'amplitude du GOPPAM reste contenue à {_ampl:.1f}x, sous le seuil "
+                    f"de {_TH['goppam']:.1f}x. Les actifs valorisent leur surface de "
+                    "manière homogène : les écarts de performance relèvent de "
+                    "l'exploitation plutôt que de la configuration des actifs. "
+                    + ("La marge GOP moyenne "
+                       f"de {sum(_mv)/len(_mv):.1f} % situe le portefeuille "
+                       + ("au-dessus des standards du secteur — la structure de coûts "
+                          "est maîtrisée."
+                          if sum(_mv)/len(_mv) >= 30 else
+                          "dans la fourchette usuelle du secteur."
+                          if sum(_mv)/len(_mv) >= 20 else
+                          "sous les standards du secteur — la structure de coûts mérite "
+                          "un examen, indépendamment de l'efficience DEA.")
+                       if _mv else "")))
 
         # ── DEA Capital vs DEA Opérationnel ──
         story.append(Paragraph("10. DEA Capital vs DEA Opérationnel", h1_s))
@@ -1019,6 +1127,12 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             if cdea is not None and not cdea.empty:
                 dd = [["Hôtel", "DEA Opér.", "DEA Capital", "Écart", "Lecture"]]
                 for _, r in cdea.head(14).iterrows():
+                    try:
+                        _dv = float(str(r['Δ (Capital-Opérat.)']).replace('%','').replace('+',''))
+                        if _dv <= -10:
+                            _sig(r['Hôtel'], 'capital_bas')
+                    except Exception:
+                        pass
                     dd.append([_clean(r['Hôtel'], 42), _clean(r['DEA Opérationnel']),
                                _clean(r['DEA Capital']), _clean(r['Δ (Capital-Opérat.)']),
                                _clean(r['Lecture'], 30)])
@@ -1044,7 +1158,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             "Flow Through = &#916;GOP / &#916;CA — part de chaque euro de revenu "
             "supplémentaire qui atteint le résultat. Expense Flex = 1 - FT lorsque le "
             "revenu recule ; il mesure la capacité à flexibiliser les charges en phase de "
-            "repli. Norme sectorielle : 50 %. Réf. : Russo &amp; Legel, hospitality "
+            f"repli. Norme retenue : {_TH['ft_norm']:.0%}. Réf. : Russo &amp; Legel, hospitality "
             "management accounting.", meth_s))
 
         _hn1 = ('revpar_n1' in dea.df.columns and 'gop_n1' in dea.df.columns
@@ -1064,9 +1178,13 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                 if ca_p <= 0 or gop_n <= 0 or abs(ca_n - ca_p) < 1e-6:
                     continue
                 ft = (gop_n - gop_p) / (ca_n - ca_p)
+                if ft < _TH['ft_low']:
+                    _sig(h, 'ft_faible')
                 _fts.append((h, ft))
-                q = ("Excellent" if ft >= 0.60 else "Correct" if ft >= 0.45
-                     else "Faible" if ft >= 0.30 else "Très faible")
+                q = ("Excellent" if ft >= _TH['ft_norm'] * 1.2
+                     else "Correct"   if ft >= _TH['ft_norm'] * 0.9
+                     else "Faible"    if ft >= _TH['ft_low']
+                     else "Très faible")
                 fd.append([_clean(h, 42), f"{ca_n:,.0f}".replace(",", " "),
                            f"{ca_p:,.0f}".replace(",", " "),
                            f"{(ca_n/ca_p - 1):+.1%}", f"{ft:.1%}", q])
@@ -1074,11 +1192,11 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                 story.append(_tbl(fd, [6.4*cm, 2.3*cm, 2.3*cm, 1.9*cm, 2.3*cm, 2.2*cm],
                                   align_right=[1, 2, 3, 4]))
                 _avg = sum(f for _, f in _fts) / len(_fts)
-                _low = [h for h, f in _fts if f < 0.40]
+                _low = [h for h, f in _fts if f < _TH['ft_low']]
                 story.append(_lecture(
                     f"Flow Through moyen du portefeuille : {_avg:.0%} contre une norme "
-                    "sectorielle de 50 %. "
-                    + (f"{len(_low)} actif(s) restent sous 40 % — leur structure de coûts "
+                    f"retenue de {_TH['ft_norm']:.0%}. "
+                    + (f"{len(_low)} actif(s) restent sous {_TH['ft_low']:.0%} — leur structure de coûts "
                        "absorbe la croissance du revenu au lieu de la convertir en "
                        "résultat. C'est le symptôme d'une base de charges fixes trop "
                        "lourde ou d'une croissance obtenue par le volume plutôt que par le "
@@ -1142,6 +1260,11 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             _calc = _mq[_mq['Malmquist TFP'] != '—'].copy()
             md2 = [["Hôtel", "BCC N-1", "BCC N", "Catch-up", "Frontier shift", "TFP", "Lecture"]]
             for _, r in _mq.iterrows():
+                try:
+                    if float(r['Catch-up']) < 1.0:
+                        _sig(r['Hôtel'], 'recul')
+                except Exception:
+                    pass
                 _cat = r.get('Catégorie')
                 _cat = "Non calculable" if (not isinstance(_cat, str) or not _cat) else _cat
                 md2.append([_clean(r['Hôtel'], 42), _clean(r['BCC N-1']), _clean(r['BCC N']),
@@ -1221,6 +1344,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             if _mrv <= 0:
                 continue
             _rgi = _rv / _mrv * 100
+            if _rgi < _TH['rgi']:
+                _sig(h, 'sous_marche')
             _rgis.append((h, _rgi))
             _occ = _v(h, 'taux_occupation')
             _ari = _mpi = None
@@ -1245,24 +1370,105 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             story.append(_tbl(bd, [6.2*cm, 1.5*cm, 2.0*cm, 1.2*cm, 1.2*cm, 1.2*cm, 4.1*cm],
                               align_right=[1, 2, 3, 4, 5]))
             _avg_rgi = sum(v for _, v in _rgis) / len(_rgis)
-            _under   = [h for h, v in _rgis if v < 100]
+            _under   = [h for h, v in _rgis if v < _TH['rgi']]
             story.append(_lecture(
                 f"RGI moyen du portefeuille : {_avg_rgi:.0f}. "
                 + ("L'ensemble capte plus que sa part de marché — le portefeuille est "
                    "bien positionné et les écarts internes relèvent de l'exploitation."
-                   if _avg_rgi >= 100 else
+                   if _avg_rgi >= _TH['rgi'] else
                    "Le portefeuille capte moins que sa part de marché. C'est un signal "
                    "distinct de tout ce qui précède : un hôtel peut être efficient au sens "
                    "DEA — bien géré au regard de ses pairs internes — tout en "
                    "sous-performant son marché. Les deux diagnostics doivent être croisés "
                    "avant toute décision.")
-                + (f" {len(_under)} actif(s) sous l'indice 100." if _under else "")))
+                + (f" {len(_under)} actif(s) sous l'indice {_TH['rgi']}." if _under else "")))
         else:
             story.append(Paragraph(
                 "Aucun actif ne dispose d'une référence marché exploitable.", body_s))
 
-    # ══════════════════ SYNTHESE ══════════════════
+    # ══════════════════ SIGNAUX CUMULÉS ══════════════════
     story.append(PageBreak())
+    story.append(Paragraph("Signaux cumulés — lecture transversale", h1_s))
+    story.append(Paragraph(
+        "Chaque section précédente pose un diagnostic isolé. Cette lecture les croise : "
+        "un actif signalé une seule fois relève d'un ajustement ciblé, un actif cumulant "
+        "trois signaux indépendants pose une question de détention. La convergence de "
+        "diagnostics méthodologiquement distincts est un indice plus solide qu'un score "
+        "unique, quel qu'il soit.", meth_s))
+
+    _cum = sorted(((h, s) for h, s in _sig_reg.items() if len(s) >= 2),
+                  key=lambda x: (-len(x[1]), dea.bcc_scores.get(x[0], 0)))
+    if _cum:
+        _cd = [["Hôtel", "BCC", "Signaux", "Diagnostics convergents"]]
+        for h, sgs in _cum[:12]:
+            _cd.append([_clean(h, 38), f"{dea.bcc_scores.get(h,0):.1%}", str(len(sgs)),
+                        _clean(" · ".join(_SIGLAB[k] for k in sorted(sgs)), 92)])
+        story.append(_tbl(_cd, [5.2*cm, 1.5*cm, 1.4*cm, 9.3*cm],
+                          hdr=AMBER, fs=6.8, align_right=[1, 2]))
+
+        _max  = max(len(s) for _, s in _cum)
+        _lourd = [h for h, s in _cum if len(s) >= 3]
+        _txt = (f"{len(_cum)} actif(s) cumulent au moins deux signaux, "
+                f"jusqu'à {_max} pour le plus exposé. ")
+        if _lourd:
+            _txt += (f"Les {len(_lourd)} actif(s) à trois signaux ou plus — "
+                     + ", ".join(_clean(h) for h in _lourd[:3])
+                     + (" …" if len(_lourd) > 3 else "")
+                     + " — méritent un examen dédié avant le prochain cycle "
+                     "budgétaire : le cumul suggère une cause structurelle commune "
+                     "plutôt qu'une série de dysfonctionnements indépendants. ")
+        _txt += ("À l'inverse, un actif absent de ce tableau ne présente aucune "
+                 "convergence de signaux : ses écarts éventuels relèvent d'ajustements "
+                 "d'exploitation.")
+        story.append(_lecture(_txt))
+
+        # Combinaisons remarquables — la lecture croisée proprement dite
+        _combi = []
+        for h, s in _sig_reg.items():
+            if {'capital_bas', 'ft_faible'} <= s:
+                _combi.append((h, "Capital sous-productif et conversion faible",
+                               "L'actif immobilise du capital que son exploitation ne "
+                               "rentabilise pas, et sa structure de coûts absorbe la "
+                               "croissance. Arbitrage à instruire — un plan managérial "
+                               "seul ne corrigera pas les deux."))
+            elif {'sbm_masque', 'recul'} <= s:
+                _combi.append((h, "Inefficience masquée et dégradation",
+                               "Le score radial flatte la situation réelle et la "
+                               "trajectoire est baissière. Le diagnostic apparent "
+                               "sous-estime le problème ; auditer les postes identifiés "
+                               "en section Slacks."))
+            elif {'sous_marche', 'critique'} <= s:
+                _combi.append((h, "Double sous-performance interne et externe",
+                               "L'actif est en retard sur ses pairs du portefeuille et "
+                               "sur son marché local. Les deux référentiels convergent : "
+                               "le problème est propre à l'actif, pas au segment."))
+            elif {'double_peine', 'sous_marche'} <= s:
+                _combi.append((h, "Handicap structurel confirmé par le marché",
+                               "Gestion et dimensionnement déficients, dans un actif qui "
+                               "capte en outre moins que sa part de marché. Le "
+                               "repositionnement doit précéder tout investissement."))
+        if _combi:
+            story.append(Spacer(1, 6))
+            story.append(Paragraph("Combinaisons appelant une décision", h2_s))
+            # Les chaînes ne se coupent pas dans un tableau ReportLab : le texte
+            # long doit passer par un Paragraph pour être retourné à la ligne.
+            _cell = S("CEL", fontSize=6.8, leading=8.4, fontName="Helvetica")
+            _cellb= S("CLB", fontSize=6.8, leading=8.4, fontName="Helvetica-Bold")
+            _kd = [["Hôtel", "Combinaison", "Ce qu'elle implique"]]
+            for h, lab, txt in _combi[:8]:
+                _kd.append([Paragraph(_clean(h), _cellb),
+                            Paragraph(lab, _cell),
+                            Paragraph(txt, _cell)])
+            story.append(_tbl(_kd, [4.0*cm, 3.9*cm, 9.5*cm], hdr=RED, fs=7.0))
+    else:
+        story.append(Paragraph(
+            "Aucun actif ne cumule plusieurs signaux de vigilance. Les écarts observés "
+            "dans les sections précédentes sont isolés et relèvent chacun d'un levier "
+            "propre — c'est le profil d'un portefeuille sain, dont les marges de "
+            "progression sont opérationnelles et non structurelles.", body_s))
+
+    # ══════════════════ SYNTHESE ══════════════════
+    story.append(Spacer(1, 10))
     story.append(Paragraph("Synthèse — priorités d'action", h1_s))
 
     _q3 = [h for h in dea.hotels if dea.quadrants.get(h) == 'Q3']
@@ -1301,6 +1507,19 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         "priorisation et de dialogue avec les exploitants ; il ne se substitue ni à une "
         "due diligence, ni à une analyse de marché, ni au jugement du comité "
         "d'investissement.", body_s))
+
+    story.append(Paragraph(
+        "Les commentaires « lecture investisseur » se déclenchent sur des seuils "
+        + ("<b>ajustés pour ce portefeuille</b>" if _TH_CUSTOM
+           else "correspondant aux conventions du secteur")
+        + f" : actif critique sous {_TH['crit']:.0%} de BCC, Flow Through de référence "
+        f"{_TH['ft_norm']:.0%} (alerte sous {_TH['ft_low']:.0%}), écart BCC-SBM signalé "
+        f"au-delà de {_TH['sbm']*100:.0f} points, écart technologique au-delà de "
+        f"{_TH['tgr']*100:.0f} points, amplitude GOPPAM au-delà de {_TH['goppam']:.1f}x, "
+        f"parité marché à RGI {_TH['rgi']}."
+        + ("  Ces valeurs ont été modifiées par rapport aux réglages par défaut ; "
+           "elles doivent être cohérentes avec le positionnement du portefeuille."
+           if _TH_CUSTOM else ""), small_s))
 
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
@@ -1522,6 +1741,43 @@ with st.sidebar:
     st.subheader("📐 Seuils Quadrants")
     bcc_threshold   = st.slider("Seuil BCC efficience",   0.70, 0.99, 0.90, 0.01)
     scale_threshold = st.slider("Seuil Scale Efficiency", 0.70, 0.99, 0.90, 0.01)
+
+    # ── Seuils de lecture du rapport ─────────────────────────────────────────
+    # Les valeurs par défaut sont des conventions sectorielles hôtellerie.
+    # Elles peuvent être mal calibrées sur un portefeuille très haut de gamme
+    # ou très économique : ces curseurs permettent de les recaler.
+    with st.expander("📄 Seuils d'interprétation du rapport"):
+        st.caption(
+            "Ces seuils déclenchent les commentaires « lecture investisseur » du "
+            "rapport PDF. Ils ne modifient aucun calcul d'efficience."
+        )
+        _th_crit   = st.slider("Actif critique — BCC sous", 0.60, 0.95, 0.85, 0.01,
+                               key='th_crit',
+                               help="En dessous de ce score, l'actif entre dans le plan d'action prioritaire.")
+        _th_ft     = st.slider("Flow Through — norme sectorielle", 0.30, 0.70, 0.50, 0.05,
+                               key='th_ft',
+                               help="Part du revenu supplémentaire convertie en GOP. 50 % est la norme usuelle.")
+        _th_ft_low = st.slider("Flow Through — seuil d'alerte", 0.15, 0.50, 0.40, 0.05,
+                               key='th_ftlow',
+                               help="En dessous, la structure de coûts absorbe la croissance.")
+        _th_sbm    = st.slider("Écart BCC-SBM signalé (pts)", 5, 40, 15, 1,
+                               key='th_sbm',
+                               help="Au-delà, le score radial masque une inefficience localisée.")
+        _th_tgr    = st.slider("Écart technologique TGR signalé (pts)", 5, 40, 15, 1,
+                               key='th_tgr',
+                               help="Au-delà, l'écart entre segments relève de l'arbitrage, pas du management.")
+        _th_goppam = st.slider("Amplitude GOPPAM signalée (×)", 1.5, 5.0, 2.5, 0.1,
+                               key='th_goppam',
+                               help="Rapport max/min du GOP par m² au-delà duquel l'hétérogénéité est commentée.")
+        _th_rgi    = st.slider("RGI — parité marché", 80, 120, 100, 1,
+                               key='th_rgi',
+                               help="Indice de référence : 100 = l'actif capte exactement sa part de marché.")
+
+    REPORT_THRESHOLDS = {
+        'crit'  : _th_crit,   'ft_norm': _th_ft,     'ft_low': _th_ft_low,
+        'sbm'   : _th_sbm / 100.0,  'tgr': _th_tgr / 100.0,
+        'goppam': _th_goppam, 'rgi'   : _th_rgi,
+    }
 
     st.markdown("---")
     st.subheader("📐 Mode variables (Raab & Lichty, 2002)")
@@ -5206,6 +5462,7 @@ sont automatiquement mappées vers les noms standard des modules.*
                         sw_results=st.session_state.get('sw_results'),
                         jours_exploit=jours_exploit, ft_pct=ft_pct,
                         avg_salary=avg_salary,
+                        thresholds=REPORT_THRESHOLDS,
                     )
                     if _rp:
                         st.session_state["portfolio_pdf"]      = _rp
