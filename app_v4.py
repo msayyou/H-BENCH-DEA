@@ -2187,14 +2187,13 @@ best_topsis = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
 # ─────────────────────────────────────────────
 #  11 ONGLETS
 # ─────────────────────────────────────────────
-tab_board, tab_kpi, tab_topsis, tab_quad, tab_slacks, tab_fiche, tab_kmeans, tab_meta, tab_malm, tab_bmark, tab_capital, tab_budget, tab_synth = st.tabs([
+tab_board, tab_kpi, tab_topsis, tab_quad, tab_slacks, tab_fiche, tab_meta, tab_malm, tab_bmark, tab_capital, tab_budget, tab_synth = st.tabs([
     "📋 Rapport Board",
     "📈 Dashboard KPIs",
     "🏆 Classement TOPSIS",
     "📐 Quadrants & Échelle",
     "🔥 Slacks & Gaspillages",
     "🔍 Fiche Actif",
-    "🗂️ Segmentation K-means",
     "🌐 Metafrontière",
     "📈 Malmquist & Dynamique Temporelle",
     "📊 Benchmark Marché",
@@ -2813,72 +2812,6 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
 
 # ══════════════════════════════════════════════
 # TAB 4 — SEGMENTATION K-MEANS
-# ══════════════════════════════════════════════
-with tab_kmeans:
-    st.markdown('<p class="section-title">🗂️ Segmentation K-means — 4 Clusters</p>', unsafe_allow_html=True)
-
-    # Silhouette score + méthode du coude
-    _sil = getattr(dea, 'kmeans_silhouette', None)
-    _inertias = getattr(dea, 'kmeans_inertias', {})
-    _sil_col1, _sil_col2 = st.columns(2)
-    with _sil_col1:
-        if _sil is not None:
-            _sil_label = 'excellent' if _sil > 0.7 else ('bon' if _sil > 0.5 else ('moyen' if _sil > 0.3 else 'faible'))
-            st.metric('Silhouette Score (k=4)', f'{_sil:.3f}',
-                      help='Rousseeuw (1987). >0.7=excellent | 0.5-0.7=bon | 0.3-0.5=moyen | <0.3=faible — remettre k en question')
-            st.caption(f'Qualité clustering : **{_sil_label}**')
-    with _sil_col2:
-        if _inertias:
-            # go already imported at top
-            _fig_elbow = go.Figure(go.Scatter(x=list(_inertias.keys()), y=list(_inertias.values()),
-                mode='lines+markers', marker=dict(color='#2e6da4')))
-            _fig_elbow.add_vline(x=4, line_dash='dash', line_color='red', annotation_text='k=4 actuel')
-            _fig_elbow.update_layout(title='Méthode du coude', xaxis_title='k', yaxis_title='Inertie',
-                height=200, margin=dict(t=30,b=20,l=40,r=20), paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(_fig_elbow, use_container_width=True)
-
-    cluster_summary = dea.get_cluster_summary()
-    st.dataframe(cluster_summary, use_container_width=True, hide_index=True)
-
-    cluster_colors = {
-        '🏆 Leaders': '#1e8449', '📈 Intermédiaires': '#2e6da4',
-        '⚠️ Sous-performants': '#f39c12', '🔴 Critiques': '#c0392b',
-    }
-    fig_km = go.Figure()
-    for lbl, color in cluster_colors.items():
-        hotels_c = [h for h in dea.hotels if dea.kmeans_labels.get(h) == lbl]
-        if hotels_c:
-            fig_km.add_trace(go.Scatter(
-                x=[dea.scale_efficiency[h] for h in hotels_c],
-                y=[dea.bcc_scores[h] for h in hotels_c],
-                mode='markers+text', text=hotels_c, textposition='top center',
-                textfont=dict(size=9), marker=dict(size=12, color=color), name=lbl,
-            ))
-    fig_km.update_layout(
-        title="Segmentation K-means : BCC vs Efficacité d'Échelle",
-        xaxis=dict(title="Scale Efficiency", range=[0, 1.05], tickformat='.0%'),
-        yaxis=dict(title="Score BCC", range=[0, 1.05], tickformat='.0%'),
-        height=480, paper_bgcolor='rgba(0,0,0,0)', legend_title="Segment",
-    )
-    st.plotly_chart(fig_km, use_container_width=True)
-
-    fig_box = go.Figure()
-    for lbl, color in cluster_colors.items():
-        hotels_c = [h for h in dea.hotels if dea.kmeans_labels.get(h) == lbl]
-        if hotels_c:
-            fig_box.add_trace(go.Box(
-                y=[dea.bcc_scores[h] for h in hotels_c], name=lbl,
-                marker_color=color, boxpoints='all',
-            ))
-    fig_box.update_layout(
-        title="Distribution BCC par segment",
-        yaxis=dict(title="Score BCC", tickformat='.0%'),
-        height=380, paper_bgcolor='rgba(0,0,0,0)',
-    )
-    st.plotly_chart(fig_box, use_container_width=True)
-
-# ══════════════════════════════════════════════
-# TAB 5 — QUADRANTS & ÉCHELLE
 # ══════════════════════════════════════════════
 with tab_quad:
     st.markdown('<p class="section-title">📐 4 Quadrants — Gestion Pure × Efficacité d\'Échelle</p>', unsafe_allow_html=True)
@@ -3599,6 +3532,79 @@ with tab_fiche:
 # TAB 8 — METAFRONTIÈRE
 # ══════════════════════════════════════════════
 with tab_meta:
+    # ══════════════════════════════════════════════════════════════════════
+    #  SEGMENTATION K-MEANS — fusionnée depuis son ancien onglet autonome.
+    #  Sa place naturelle est ici : la segmentation détermine les groupes sur
+    #  lesquels la métafrontière estime les frontières technologiques.
+    # ══════════════════════════════════════════════════════════════════════
+    with st.expander('🗂️ Segmentation K-means — base des groupes technologiques',
+                     expanded=False):
+        st.markdown('<p class="section-title">🗂️ Segmentation K-means — 4 Clusters</p>', unsafe_allow_html=True)
+
+        # Silhouette score + méthode du coude
+        _sil = getattr(dea, 'kmeans_silhouette', None)
+        _inertias = getattr(dea, 'kmeans_inertias', {})
+        _sil_col1, _sil_col2 = st.columns(2)
+        with _sil_col1:
+            if _sil is not None:
+                _sil_label = 'excellent' if _sil > 0.7 else ('bon' if _sil > 0.5 else ('moyen' if _sil > 0.3 else 'faible'))
+                st.metric('Silhouette Score (k=4)', f'{_sil:.3f}',
+                          help='Rousseeuw (1987). >0.7=excellent | 0.5-0.7=bon | 0.3-0.5=moyen | <0.3=faible — remettre k en question')
+                st.caption(f'Qualité clustering : **{_sil_label}**')
+        with _sil_col2:
+            if _inertias:
+                # go already imported at top
+                _fig_elbow = go.Figure(go.Scatter(x=list(_inertias.keys()), y=list(_inertias.values()),
+                    mode='lines+markers', marker=dict(color='#2e6da4')))
+                _fig_elbow.add_vline(x=4, line_dash='dash', line_color='red', annotation_text='k=4 actuel')
+                _fig_elbow.update_layout(title='Méthode du coude', xaxis_title='k', yaxis_title='Inertie',
+                    height=200, margin=dict(t=30,b=20,l=40,r=20), paper_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(_fig_elbow, use_container_width=True)
+
+        cluster_summary = dea.get_cluster_summary()
+        st.dataframe(cluster_summary, use_container_width=True, hide_index=True)
+
+        cluster_colors = {
+            '🏆 Leaders': '#1e8449', '📈 Intermédiaires': '#2e6da4',
+            '⚠️ Sous-performants': '#f39c12', '🔴 Critiques': '#c0392b',
+        }
+        fig_km = go.Figure()
+        for lbl, color in cluster_colors.items():
+            hotels_c = [h for h in dea.hotels if dea.kmeans_labels.get(h) == lbl]
+            if hotels_c:
+                fig_km.add_trace(go.Scatter(
+                    x=[dea.scale_efficiency[h] for h in hotels_c],
+                    y=[dea.bcc_scores[h] for h in hotels_c],
+                    mode='markers+text', text=hotels_c, textposition='top center',
+                    textfont=dict(size=9), marker=dict(size=12, color=color), name=lbl,
+                ))
+        fig_km.update_layout(
+            title="Segmentation K-means : BCC vs Efficacité d'Échelle",
+            xaxis=dict(title="Scale Efficiency", range=[0, 1.05], tickformat='.0%'),
+            yaxis=dict(title="Score BCC", range=[0, 1.05], tickformat='.0%'),
+            height=480, paper_bgcolor='rgba(0,0,0,0)', legend_title="Segment",
+        )
+        st.plotly_chart(fig_km, use_container_width=True)
+
+        fig_box = go.Figure()
+        for lbl, color in cluster_colors.items():
+            hotels_c = [h for h in dea.hotels if dea.kmeans_labels.get(h) == lbl]
+            if hotels_c:
+                fig_box.add_trace(go.Box(
+                    y=[dea.bcc_scores[h] for h in hotels_c], name=lbl,
+                    marker_color=color, boxpoints='all',
+                ))
+        fig_box.update_layout(
+            title="Distribution BCC par segment",
+            yaxis=dict(title="Score BCC", tickformat='.0%'),
+            height=380, paper_bgcolor='rgba(0,0,0,0)',
+        )
+        st.plotly_chart(fig_box, use_container_width=True)
+
+    # ══════════════════════════════════════════════
+    # TAB 5 — QUADRANTS & ÉCHELLE
+    # ══════════════════════════════════════════════
+
     st.markdown('<p class="section-title">🌐 Metafrontière — Analyse GTE / MTE / TGR</p>', unsafe_allow_html=True)
     st.info("""
 **Principe (Assaf et al., 2010) :**
