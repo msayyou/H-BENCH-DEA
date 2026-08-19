@@ -2534,15 +2534,22 @@ with tab_capital:
             'classement (★)'    : int(dea.df.loc[hotel, 'classement_etoiles'])  if (getattr(dea,'has_stars',  False) and 'classement_etoiles'   in dea.df.columns) else 3,
         }
         init_data[hotel] = row
-    df_init = pd.DataFrame(init_data).T
+    # Conserver l'ordre stable des hôtels
+    df_init = pd.DataFrame(init_data).T.loc[dea.hotels]
 
     if ('capital_input' not in st.session_state or
             set(st.session_state['capital_input'].index) != set(dea.hotels)):
-        st.session_state['capital_input'] = df_init
+        # Première initialisation OU changement de portefeuille → reset complet
+        st.session_state['capital_input'] = df_init.copy()
     else:
+        # Ne pré-remplir depuis le CSV que les colonnes ENCORE à zéro dans la saisie
+        # (évite d'écraser les valeurs déjà saisies par l'utilisateur)
+        cur = st.session_state['capital_input']
         for col in ['surface_m2','capex_annuel (k€)','gop (k€)','classement (★)']:
-            if df_init[col].sum() > 0:
+            if df_init[col].sum() > 0 and cur[col].sum() == 0:
                 st.session_state['capital_input'][col] = df_init[col]
+        # Garantir l'ordre stable
+        st.session_state['capital_input'] = st.session_state['capital_input'].loc[dea.hotels]
 
     csv_cols = []
     if getattr(dea,'has_surface',False): csv_cols.append('surface_m2')
@@ -2557,9 +2564,9 @@ with tab_capital:
     cap_input = st.data_editor(
         st.session_state['capital_input'], use_container_width=True, num_rows='fixed',
         column_config={
-            'surface_m2'        : st.column_config.NumberColumn('Surface (m²)', min_value=0, format='%d m²'),
-            'capex_annuel (k€)' : st.column_config.NumberColumn('CAPEX annuel (k€)', min_value=0, format='%.0f k€'),
-            'gop (k€)'          : st.column_config.NumberColumn('GOP (k€)', min_value=0, format='%.0f k€'),
+            'surface_m2'        : st.column_config.NumberColumn('Surface (m²)',      min_value=0, format='%.0f'),
+            'capex_annuel (k€)' : st.column_config.NumberColumn('CAPEX annuel (k€)', min_value=0, format='%.1f'),
+            'gop (k€)'          : st.column_config.NumberColumn('GOP (k€)',           min_value=0, format='%.1f'),
             'classement (★)'    : st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
         },
         key='capital_editor',
