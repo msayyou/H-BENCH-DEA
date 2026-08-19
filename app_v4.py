@@ -2638,7 +2638,108 @@ with tab_capital:
     if csv_cols:
         st.success(f"✅ Données lues depuis le CSV : {', '.join(csv_cols)}")
     else:
-        st.info("Aucune colonne capital dans le CSV — saisissez les valeurs ci-dessous.")
+        st.info("Aucune colonne capital dans le CSV — saisissez les valeurs ci-dessous, "
+                "ou utilisez le modèle Excel/CSV pré-rempli.")
+
+    # ── Modèle à télécharger / import de fichier rempli ──────────────────────
+    with st.expander("📄 Modèle Excel/CSV — remplir hors application", expanded=(not csv_cols)):
+        st.caption(
+            "Téléchargez le modèle pré-rempli avec vos hôtels, complétez-le dans "
+            "Excel, puis réimportez-le ici. Les valeurs remplaceront le tableau."
+        )
+
+        _tpl = st.session_state['capital_input'].copy()
+        _tpl.index.name = 'hotel_name'
+
+        _dl1, _dl2, _dl3 = st.columns([1, 1, 2])
+
+        with _dl1:
+            _tpl_xlsx = BytesIO()
+            with pd.ExcelWriter(_tpl_xlsx, engine='openpyxl') as _w:
+                _tpl.to_excel(_w, sheet_name='Capital')
+                _ws = _w.sheets['Capital']
+                _ws.column_dimensions['A'].width = 38
+                for _c in 'BCDE':
+                    _ws.column_dimensions[_c].width = 20
+                _ws.freeze_panes = 'B2'
+            st.download_button(
+                "⬇️ Modèle Excel", data=_tpl_xlsx.getvalue(),
+                file_name="deah_capital_modele.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key='cap_tpl_xlsx',
+            )
+
+        with _dl2:
+            st.download_button(
+                "⬇️ Modèle CSV",
+                data=_tpl.to_csv(sep=';', decimal=',').encode('utf-8-sig'),
+                file_name="deah_capital_modele.csv", mime="text/csv",
+                use_container_width=True, key='cap_tpl_csv',
+            )
+
+        with _dl3:
+            st.caption(
+                "**Colonnes attendues** — `hotel_name` (colonne A, noms identiques), "
+                "`surface_m2`, `capex_annuel (k€)`, `gop (k€)`, `classement (★)`."
+            )
+
+        _cap_up = st.file_uploader(
+            "Réimporter le modèle rempli",
+            type=['xlsx', 'xls', 'csv'], key='cap_upload',
+        )
+
+        if _cap_up is not None:
+            try:
+                if (_cap_up.name or '').lower().endswith(('.xlsx', '.xls')):
+                    _up = pd.read_excel(_cap_up, index_col=0)
+                else:
+                    _rawc = _cap_up.read().decode('utf-8-sig', errors='replace')
+                    _sepc = ';' if _rawc.count(';') > _rawc.count(',') else ','
+                    _up = pd.read_csv(BytesIO(_rawc.encode('utf-8')), index_col=0,
+                                      sep=_sepc, decimal=',' if _sepc == ';' else '.')
+
+                _up.index   = _up.index.astype(str).str.strip()
+                _up.columns = [str(c).strip() for c in _up.columns]
+
+                _need = ['surface_m2', 'capex_annuel (k€)', 'gop (k€)', 'classement (★)']
+                _miss = [c for c in _need if c not in _up.columns]
+                if _miss:
+                    st.error(f"❌ Colonnes manquantes : {', '.join(_miss)}")
+                else:
+                    _matched = [h for h in dea.hotels if h in _up.index]
+                    _unknown = [str(h) for h in _up.index if h not in dea.hotels]
+
+                    if not _matched:
+                        st.error(
+                            "❌ Aucun nom d'hôtel ne correspond au portefeuille chargé. "
+                            "Les noms doivent être identiques à ceux du fichier principal."
+                        )
+                    else:
+                        _new = st.session_state['capital_input'].copy()
+                        for _c in _need:
+                            _vals = pd.to_numeric(_up.loc[_matched, _c], errors='coerce').fillna(0)
+                            _new.loc[_matched, _c] = _vals.values
+                        _new['classement (★)'] = (_new['classement (★)']
+                                                  .clip(1, 5).round().astype(int))
+                        st.session_state['capital_input'] = _new.loc[dea.hotels]
+
+                        st.success(
+                            f"✅ {len(_matched)} hôtel(s) mis à jour sur {len(dea.hotels)}."
+                        )
+                        if _unknown:
+                            st.warning(
+                                f"⚠️ {len(_unknown)} ligne(s) ignorée(s) — nom inconnu : "
+                                + ", ".join(_unknown[:4])
+                                + (" …" if len(_unknown) > 4 else "")
+                            )
+                        _absents = [h for h in dea.hotels if h not in _up.index]
+                        if _absents:
+                            st.info(
+                                f"ℹ️ {len(_absents)} hôtel(s) absent(s) du fichier — "
+                                "valeurs actuelles conservées."
+                            )
+            except Exception as _e:
+                st.error(f"❌ Lecture impossible : {_e}")
 
     cap_input = st.data_editor(
         st.session_state['capital_input'], use_container_width=True, num_rows='fixed',
@@ -2651,6 +2752,33 @@ with tab_capital:
         key='capital_editor',
     )
     st.session_state['capital_input'] = cap_input
+
+    # ── Export du tableau tel que saisi ─────────────────────────────────────
+    _ex = cap_input.copy(); _ex.index.name = 'hotel_name'
+    _e1, _e2, _e3 = st.columns([1, 1, 3])
+    with _e1:
+        _ex_xlsx = BytesIO()
+        with pd.ExcelWriter(_ex_xlsx, engine='openpyxl') as _w:
+            _ex.to_excel(_w, sheet_name='Capital')
+            _ws = _w.sheets['Capital']
+            _ws.column_dimensions['A'].width = 38
+            for _c in 'BCDE':
+                _ws.column_dimensions[_c].width = 20
+            _ws.freeze_panes = 'B2'
+        st.download_button(
+            "⬇️ Excel", data=_ex_xlsx.getvalue(),
+            file_name="deah_capital_saisie.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True, key='cap_exp_xlsx',
+        )
+    with _e2:
+        st.download_button(
+            "⬇️ CSV", data=_ex.to_csv(sep=';', decimal=',').encode('utf-8-sig'),
+            file_name="deah_capital_saisie.csv", mime="text/csv",
+            use_container_width=True, key='cap_exp_csv',
+        )
+    with _e3:
+        st.caption("Sauvegarde de la saisie — réimportable à la session suivante.")
 
     has_any = (cap_input[['surface_m2','capex_annuel (k€)','gop (k€)']].sum().sum() > 0)
     if not has_any:
