@@ -54,7 +54,7 @@ def generate_fiche_actif_pdf(
     dea,
     quadrant_labels: dict,
     avg_salary: float = 35_000,
-    revpar_value: float = 1_000,
+    revpar_value: float = 1,
     jours_exploit: int = 365,
 ) -> bytes:
     """
@@ -122,7 +122,8 @@ def generate_fiche_actif_pdf(
     slk_emp = dea.slacks.get(hotel, {}).get("inputs", {}).get("nb_employes", 0)
     slk_rvp = dea.slacks.get(hotel, {}).get("outputs", {}).get("revpar", 0)
     up_fte  = round(slk_emp * avg_salary / 1000)
-    up_rev  = round(slk_rvp * nights * revpar_value / 1_000_000, 2)
+    # Chambres disponibles x jours — le RevPAR intègre déjà l'occupation
+    up_rev  = round(slk_rvp * lits * jours_exploit * revpar_value / 1_000_000, 2)
 
     peers   = dea.peers.get(hotel, {})
     targets = dea.targets.get(hotel, {})
@@ -1715,7 +1716,13 @@ with st.sidebar:
 
     st.subheader("💼 Paramètres économiques")
     avg_salary   = st.number_input("Coût ETP moyen (€/an)", help="Salaire chargé moyen par ETP. Appliquer la même valeur pour tous les actifs du compset.",           value=35_000, step=5_000, format="%i")
-    revpar_value = st.number_input("Multiplicateur RevPAR (1 = €)", help="Laisser à 1 si RevPAR est en € réels dans le CSV. Ajuster uniquement si RevPAR est un indice.", value=1_000,  step=100,   format="%i")
+    # Défaut = 1 : dans l'immense majorité des fichiers, RevPAR est déjà en €.
+    # Un défaut à 1000 multipliait silencieusement tous les upsides par 1000.
+    revpar_value = st.number_input(
+        "Multiplicateur RevPAR (1 = €)",
+        help="Laisser à 1 si RevPAR est en € réels dans le CSV — cas normal. "
+             "Ajuster uniquement si RevPAR est exprimé en indice ou en k€.",
+        value=1, step=1, min_value=1, format="%i")
     jours_exploit = st.number_input(
         "Jours d'exploitation / an",
         value=365, min_value=30, max_value=365, step=1, format="%i",
@@ -2215,7 +2222,7 @@ with tab_board:
     _orient_lbl = "📥 Input-Oriented" if getattr(dea, 'orientation', 'input') == 'input' else "📤 Output-Oriented"
     st.markdown(
         f"<div style='background:#1a3a5c;color:white;padding:10px 16px;border-radius:8px;margin-bottom:12px;'>"
-        f"<b>DEA-H v3.9 — Rapport Comité d'Investissement</b> &nbsp;·&nbsp; "
+        f"<b>DEA-H v4 — Rapport Comité d'Investissement</b> &nbsp;·&nbsp; "
         f"{dea.n} hôtels analysés &nbsp;·&nbsp; {_orient_lbl} &nbsp;·&nbsp; "
         f"{datetime.now().strftime('%d/%m/%Y')}</div>",
         unsafe_allow_html=True,
@@ -2235,20 +2242,55 @@ with tab_board:
     _kc5.metric("🥇 Leader TOPSIS",   (_best_tp[:18] if len(_best_tp) > 18 else _best_tp))
 
     # ── Upside financier total ───────────────────────────────────────────────
-    _up_fte = _up_rev = _up_gop = 0.0
+    _up_fte = _up_rev = _up_gop = _ca_tot = 0.0
     for _h in dea.hotels:
         _lits  = float(dea.df.loc[_h, 'nb_lits'])
-        _occ   = float(dea.df.loc[_h, 'taux_occupation']) / 100
+        _rvp   = float(dea.df.loc[_h, 'revpar'])
         _se    = dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', 0)
         _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
         _up_fte += _se * avg_salary / 1000
-        _up_rev += _sr * _lits * jours_exploit * _occ * revpar_value / 1_000_000
-        _up_gop += _sr * _lits * jours_exploit * _occ * revpar_value * ft_pct / 1_000_000
+        # CA = RevPAR × chambres × jours. Ne PAS multiplier par le taux
+        # d'occupation : RevPAR = ADR × OCC l'intègre déjà (USALI / Kimes 1989).
+        _ca_tot += _rvp * _lits * jours_exploit * revpar_value / 1_000_000
+        _up_rev += _sr  * _lits * jours_exploit * revpar_value / 1_000_000
+        _up_gop += _sr  * _lits * jours_exploit * revpar_value * ft_pct / 1_000_000
+
+    _pct_rev = (_up_rev / _ca_tot * 100) if _ca_tot > 0 else 0
+
     st.markdown("---")
     _uc1, _uc2, _uc3 = st.columns(3)
-    _uc1.metric("💼 Upside ETP total",      f"{_up_fte:,.0f} k€/an",  help="Réduction masse salariale si alignement sur frontière DEA")
-    _uc2.metric("🏨 Upside RevPAR total",   f"{_up_rev:.2f} M€/an",   help="Revenu additionnel si tous les actifs atteignent leur RevPAR cible")
-    _uc3.metric("💰 Upside GOP /FT estimé", f"{_up_gop:.2f} M€/an",   help="Upside GOP ajusté Flow Through benchmark STR par étoiles")
+    _uc1.metric("💼 Upside ETP total", f"{_up_fte:,.0f} k€/an",
+                help="Réduction de masse salariale si alignement sur la frontière DEA. "
+                     f"Hypothèse : {avg_salary:,.0f} € chargés par ETP.".replace(",", " "))
+    _uc2.metric("🏨 Upside RevPAR total", f"{_up_rev:,.1f} M€/an".replace(",", " "),
+                delta=f"{_pct_rev:.0f}% du CA", delta_color="off",
+                help=f"Revenu additionnel théorique si tous les actifs atteignaient leur "
+                     f"RevPAR cible. CA actuel du portefeuille : {_ca_tot:,.0f} M€/an.".replace(",", " "))
+    _uc3.metric("💰 Upside GOP /FT estimé", f"{_up_gop:,.1f} M€/an".replace(",", " "),
+                help=f"Upside RevPAR converti au Flow Through de {ft_pct:.0%}.")
+
+    # ── Contrôle de plausibilité ────────────────────────────────────────────
+    if _pct_rev > 40:
+        st.warning(
+            f"⚠️ **Upside de {_pct_rev:.0f}% du chiffre d'affaires — chiffre à ne pas "
+            "communiquer tel quel.** Les slacks d'output mesurent la distance à la "
+            "frontière *toutes choses égales par ailleurs* : c'est un plafond "
+            "mathématique, pas un potentiel commercial. Un écart de cette ampleur "
+            "signale généralement un modèle sous-spécifié — trop peu de variables pour "
+            "le nombre d'actifs, ou un compset hétérogène. "
+            + ("**Vous êtes en mode réduit** : repassez en mode Standard si votre "
+               "fichier contient les six variables, ou consultez la Métafrontière pour "
+               "corriger l'hétérogénéité entre segments."
+               if dea_mode != 'standard' else
+               "Vérifiez l'homogénéité du compset via la Métafrontière.")
+        )
+    elif _pct_rev > 0:
+        st.caption(
+            f"Upside RevPAR = {_pct_rev:.0f}% du CA actuel ({_ca_tot:,.0f} M€/an). "
+            "Il s'agit d'un plafond théorique supposant une convergence intégrale vers "
+            "les pratiques des pairs — à pondérer par un facteur de réalisation de 30 à "
+            "50 % pour un plan à 24 mois.".replace(",", " ")
+        )
 
     # ── Verdict stratégique automatique ─────────────────────────────────────
     st.markdown("---")
@@ -2950,7 +2992,7 @@ with tab_slacks:
             slack_revpar = dea.slacks[h]['outputs'].get('revpar', 0)
             lits         = float(dea.df.loc[h, 'nb_lits'])
             upside_fte   = round(slack_emp * avg_salary / 1000)
-            upside_rev   = round(slack_revpar * lits * 365 * revpar_value / 1_000_000, 1)
+            upside_rev   = round(slack_revpar * lits * jours_exploit * revpar_value / 1_000_000, 1)
             upside_data.append({
                 'Hôtel': h, 'Score BCC': f"{dea.bcc_scores[h]:.1%}",
                 'Slack ETP (nb)': round(slack_emp, 1),
