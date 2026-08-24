@@ -32,7 +32,7 @@ import json
 import os
 
 # ============ CONFIGURATION — À PERSONNALISER ============
-NTFY_TOPIC = "reiv-pl-usali-mehdi-9f3k2x"  # <-- CHANGE CECI (nom unique et secret)
+NTFY_TOPIC = "KDS2124413"  # <-- CHANGE CECI (nom unique et secret)
 LOG_FILE = "visit_log.json"
 # ===========================================================
 
