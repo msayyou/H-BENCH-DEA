@@ -5724,20 +5724,22 @@ LOG_FILE = "visit_log.json"
 # ===========================================================
 
 def _send_notification(session_id: str):
-    """Envoie une notif push instantanée via ntfy.sh (silencieux si échec)."""
+    """Envoie une notif push instantanée via ntfy.sh (erreurs loguées, jamais bloquantes)."""
     try:
-        requests.post(
+        print(f"[TRACKER] Tentative envoi notif vers ntfy.sh/{NTFY_TOPIC}...")
+        resp = requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=f"Nouvelle visite sur P&L USALI — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}".encode("utf-8"),
+            data=f"Nouvelle visite sur DEA-H — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}".encode("utf-8"),
             headers={
-                "Title": "REIV — P&L USALI",
+                "Title": "REIV — DEA-H",
                 "Priority": "default",
                 "Tags": "eyes"
             },
-            timeout=3,
+            timeout=10,
         )
-    except Exception:
-        pass  # ne jamais bloquer l'app si la notif échoue
+        print(f"[TRACKER] Reponse ntfy.sh : status={resp.status_code} body={resp.text[:200]}")
+    except Exception as e:
+        print(f"[TRACKER] ECHEC envoi notification : {type(e).__name__}: {e}")
 
 def _log_visit():
     """Enregistre la visite dans un fichier JSON local (persiste tant que l'instance tourne)."""
@@ -5758,6 +5760,7 @@ def _log_visit():
 
 def track_visit():
     """À appeler UNE FOIS en haut du script principal, avant tout autre st.* """
+    print(f"[TRACKER] track_visit() appelée. Deja trackee cette session ? {'visit_tracked' in st.session_state}")
     if "visit_tracked" not in st.session_state:
         st.session_state.visit_tracked = True
         _log_visit()
