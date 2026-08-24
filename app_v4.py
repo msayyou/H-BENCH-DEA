@@ -5790,3 +5790,5 @@ def show_visit_dashboard():
 #   show_visit_dashboard()
 #
 # ===============================================================
+track_visit()
+show_visit_dashboard()
