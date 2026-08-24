@@ -32,9 +32,9 @@ def _send_notification(session_id: str):
         print(f"[TRACKER] Tentative envoi notif vers ntfy.sh/{NTFY_TOPIC}...")
         resp = requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=f"Nouvelle visite sur DEA-H — {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}".encode("utf-8"),
+            data=f"Nouvelle visite sur DEA-H - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}".encode("utf-8"),
             headers={
-                "Title": "REIV — DEA-H",
+                "Title": "REIV - DEA-H",
                 "Priority": "default",
                 "Tags": "eyes"
             },
