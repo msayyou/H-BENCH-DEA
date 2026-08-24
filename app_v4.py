@@ -354,7 +354,6 @@ def generate_fiche_actif_pdf(
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
     story.append(Paragraph(
         "DEA-H v3.5 · REIV Hospitality · "
-        "Charnes et al. (1978), Banker et al. (1984), Barros (2005) · "
         "Confidentiel — usage interne asset manager",
         small_s
     ))
@@ -374,9 +373,9 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     Rapport PDF portfolio — document de comité d'investissement.
 
     Contenu : couverture, note de lecture, dashboard, quadrants, TOPSIS,
-    SBM (Tone 2001), Super-Efficience (Andersen & Petersen 1993),
-    Slacks (Barros 2005), Métafrontière (O'Donnell et al. 2008),
-    Simar-Wilson (2007), Efficience Capital, DEA Capital vs Opérationnel,
+    SBM, Super-Efficience,
+    Slacks, Métafrontière,
+    Simar-Wilson, Efficience Capital, DEA Capital vs Opérationnel,
     Expense Flex & Flow Through (Russo & Legel).
     """
     if not REPORTLAB_AVAILABLE:
@@ -539,7 +538,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         story.append(Spacer(1, 4))
         story.append(_lecture(
             f"Le portefeuille compte {dea.n} unités pour {_n_var} variables. La règle "
-            f"empirique de Cooper, Seiford &amp; Tone (2007) recommande n &gt;= 3(m+s) = "
+            f"empirique recommande n &gt;= 3(m+s) = "
             f"{_seuil}. En deçà, le pouvoir discriminant de la DEA se réduit et les scores "
             "doivent être lus comme des ordres de grandeur, non comme des mesures fines. "
             "L'analyse par métafrontière ci-après atténue partiellement cette limite."))
@@ -547,8 +546,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ DASHBOARD ══════════════════
     story.append(Paragraph("1. Dashboard portefeuille", h1_s))
     story.append(Paragraph(
-        "Modèle BCC orienté input, rendements d'échelle variables — Banker, Charnes &amp; "
-        "Cooper (1984). L'efficacité d'échelle (CCR/BCC) isole la part de l'inefficience "
+        "Modèle BCC orienté input, rendements d'échelle variables. "
+        "L'efficacité d'échelle (CCR/BCC) isole la part de l'inefficience "
         "imputable à une taille inadaptée au marché.", meth_s))
 
     avg_bcc   = sum(dea.bcc_scores.values()) / len(dea.bcc_scores)
@@ -580,7 +579,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         story.append(_lecture(
             f"{_pct_eff:.0%} des actifs sont efficients — le modèle discrimine peu. "
             "Réduire le nombre de variables ou élargir l'échantillon renforcerait le "
-            "pouvoir de séparation (Vía et al., 2013)."))
+            "pouvoir de séparation."))
     else:
         _gap_moy = 1 - avg_bcc
         story.append(_lecture(
@@ -646,7 +645,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ TOPSIS ══════════════════
     story.append(Paragraph("3. Classement multicritère TOPSIS", h1_s))
     story.append(Paragraph(
-        "Hwang &amp; Yoon (1981). Le score DEA seul ne suffit pas à hiérarchiser : deux "
+        "Hwang &amp; Yoon. Le score DEA seul ne suffit pas à hiérarchiser : deux "
         "hôtels à 100 % ne sont pas équivalents pour un investisseur. TOPSIS agrège "
         "efficience, échelle, RevPAR et occupation en mesurant la distance à la solution "
         "idéale et à la solution anti-idéale.", meth_s))
@@ -664,7 +663,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ SUPER-EFFICIENCE ══════════════════
     story.append(Paragraph("4. Super-efficience — départager les actifs à 100 %", h1_s))
     story.append(Paragraph(
-        "Andersen &amp; Petersen (1993). La DEA classique plafonne à 1 : tous les actifs "
+        "Andersen &amp; Petersen. La DEA classique plafonne à 1 : tous les actifs "
         "efficients sont ex aequo. La super-efficience réévalue chaque unité en l'excluant "
         "de sa propre référence. Un score de 1,45 indique que l'hôtel pourrait consommer "
         "45 % de ressources en plus tout en restant sur la frontière — c'est une mesure de "
@@ -724,7 +723,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ SBM ══════════════════
     story.append(Paragraph("5. SBM — efficience fondée sur les écarts", h1_s))
     story.append(Paragraph(
-        "Tone (2001). Le modèle radial BCC réduit tous les inputs dans la même proportion "
+        "Tone. Le modèle radial BCC réduit tous les inputs dans la même proportion "
         "et ignore les écarts résiduels. Un hôtel peut ainsi afficher 100 % tout en "
         "gaspillant sur un poste précis. Le SBM intègre directement ces écarts : il est "
         "systématiquement plus sévère, et c'est précisément son intérêt — il révèle les "
@@ -777,7 +776,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ SLACKS ══════════════════
     story.append(Paragraph("6. Slacks — gaspillages et potentiels chiffrés", h1_s))
     story.append(Paragraph(
-        "Barros (2005). C'est la section la plus opérationnelle du rapport. Le slack "
+        "C'est la section la plus opérationnelle du rapport. Le slack "
         "traduit le score d'efficience en unités physiques : ETP en excès, euros de RevPAR "
         "non captés, points d'occupation manquants. Les cibles sont issues du comportement "
         "réel des pairs, non d'un objectif budgétaire théorique.", meth_s))
@@ -882,7 +881,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ METAFRONTIERE ══════════════════
     story.append(Paragraph("7. Métafrontière — GTE, MTE et écart technologique", h1_s))
     story.append(Paragraph(
-        "O'Donnell, Rao &amp; Battese (2008). Comparer un resort familial de 1 100 clés à "
+        "Comparer un resort familial de 1 100 clés à "
         "une boutique urbaine de 90 clés n'a pas de sens : ces actifs n'opèrent pas sous la "
         "même technologie de production. La métafrontière décompose l'efficience en deux "
         "composantes distinctes.", meth_s))
@@ -949,7 +948,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ SIMAR-WILSON ══════════════════
     story.append(Paragraph("8. Déterminants de l'efficience — régression tronquée bootstrappée", h1_s))
     story.append(Paragraph(
-        "Simar &amp; Wilson (2007), Algorithme 1. Les scores DEA sont mécaniquement "
+        "Algorithme 1. Les scores DEA sont mécaniquement "
         "corrélés entre eux — chaque score dépend de l'échantillon entier — ce qui invalide "
         "les tests statistiques usuels. La procédure exclut les unités efficientes "
         "(troncature) puis reconstruit la distribution des coefficients par bootstrap "
@@ -975,7 +974,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             _n_ineff = sum(1 for s in dea.bcc_scores.values() if s < 1 - 1e-8)
 
             # Une variable du modèle DEA ne peut pas expliquer le score qu'elle
-            # a servi à produire — endogénéité (Simar & Wilson 2007, §2).
+            # a servi à produire — endogénéité.
             _dea_vars = set(getattr(dea, 'input_cols', [])) | set(getattr(dea, 'output_cols', []))
 
             _env, _fams = [], set()
@@ -999,7 +998,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             _env = _env[:max(0, min(3, _n_ineff - 2))]
             if len(_env) >= 2:
                 # Le coût du bootstrap croît avec n et k — on l'ajuste pour que la
-                # génération du rapport reste sous la minute. Simar & Wilson (2007)
+                # génération du rapport reste sous la minute.
                 # retiennent B = 100 pour l'algorithme 1 ; l'onglet Stage 2 permet
                 # de monter jusqu'à 500 pour une estimation de publication.
                 _B = 100 if dea.n <= 15 else 60 if dea.n <= 30 else 40
@@ -1257,8 +1256,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             "Flow Through = &#916;GOP / &#916;CA — part de chaque euro de revenu "
             "supplémentaire qui atteint le résultat. Expense Flex = 1 - FT lorsque le "
             "revenu recule ; il mesure la capacité à flexibiliser les charges en phase de "
-            f"repli. Norme retenue : {_TH['ft_norm']:.0%}. Réf. : Russo &amp; Legel, hospitality "
-            "management accounting.", meth_s))
+            f"repli. Norme retenue : {_TH['ft_norm']:.0%}.", meth_s))
 
         _hn1 = ('revpar_n1' in dea.df.columns and 'gop_n1' in dea.df.columns
                 and dea.df['revpar_n1'].fillna(0).sum() > 0
@@ -1329,7 +1327,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     story.append(PageBreak())
     story.append(Paragraph("12. Malmquist — évolution de la productivité N-1 vers N", h1_s))
     story.append(Paragraph(
-        "Caves, Christensen &amp; Diewert (1982) ; Färe et al. (1994). Toutes les sections "
+        "Toutes les sections "
         "précédentes photographient un instant. Celle-ci mesure le mouvement. Un hôtel "
         "peut afficher un score médiocre tout en progressant fortement — c'est une "
         "information d'investissement différente de celle d'un actif stable et efficient.",
@@ -1624,10 +1622,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
     story.append(Paragraph(
         "DEA-H v4 &#183; REIV Hospitality &#183; "
-        "Charnes, Cooper &amp; Rhodes (1978) &#183; Banker, Charnes &amp; Cooper (1984) &#183; "
-        "Andersen &amp; Petersen (1993) &#183; Tone (2001) &#183; Barros (2005) &#183; "
-        "Simar &amp; Wilson (2007) &#183; O'Donnell et al. (2008) &#183; "
-        "Pulina &amp; Santoni (2018) &#183; Confidentiel",
+        "Confidentiel",
         small_s))
 
     doc.build(story)
@@ -1839,7 +1834,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption(
         "💡 Si votre compset mélange des catégories (3★/5★, urban/resort), utilisez l'onglet "
-        "**🌐 Metafrontière** pour corriger le biais inter-segments via GTE/TGR (Assaf et al. 2010)."
+        "**🌐 Metafrontière** pour corriger le biais inter-segments via GTE/TGR."
     )
 
     st.markdown("---")
@@ -1885,7 +1880,7 @@ with st.sidebar:
     }
 
     st.markdown("---")
-    st.subheader("📐 Mode variables (Raab & Lichty, 2002)")
+    st.subheader("📐 Mode variables")
     _n_hotels = len(df) if 'df' in dir() else 0
     if _n_hotels > 0 and _n_hotels < 18:
         st.warning(f"⚠️ {_n_hotels} hôtels — en dessous du seuil standard (18). Voir mode ci-dessous.")
@@ -1899,7 +1894,7 @@ with st.sidebar:
             'minimal' : f"Minimal (2+1) — min 9 hôtels  · ETP + OpEx → RevPAR",
         }[x],
         help="Réduire les variables si votre compset est petit. "
-             "Règle : n_hôtels ≥ 3 × (n_inputs + n_outputs). Réf. : Raab & Lichty (2002).",
+             "Règle : n_hôtels ≥ 3 × (n_inputs + n_outputs).",
         index=0,
     )
 
@@ -1916,12 +1911,12 @@ with st.sidebar:
         options=['input', 'output'],
         format_func=lambda x: "📥 Input-Oriented (plan restructuration)" if x == 'input'
                                else "📤 Output-Oriented (plan croissance)",
-        help="Input : 'De combien réduire les ressources ?' / Output : 'De combien augmenter les revenus ?' (Barros, 2005)",
+        help="Input : 'De combien réduire les ressources ?' / Output : 'De combien augmenter les revenus ?'",
     )
 
     st.markdown("---")
     with st.expander("⚖️ Poids TOPSIS (Cornell methodology)", expanded=False):
-        st.caption("Charnes et al. (1978) — Somme des poids = 1. Défaut Cornell : BCC 35% · Scale 25% · RevPAR 25% · TO 15%")
+        st.caption("Somme des poids = 1. Défaut Cornell : BCC 35% · Scale 25% · RevPAR 25% · TO 15%")
         _w_bcc    = st.slider("BCC (Gestion pure)",   0.0, 1.0, 0.35, 0.05, key='w_bcc')
         _w_scale  = st.slider("Scale Efficiency",     0.0, 1.0, 0.25, 0.05, key='w_scale')
         _w_revpar = st.slider("RevPAR",               0.0, 1.0, 0.25, 0.05, key='w_revpar')
@@ -1972,7 +1967,6 @@ def load_sample() -> pd.DataFrame:
         'classement_etoiles': [5, 4, 4, 4, 4, 3, 5, 5, 5, 4, 5, 3, 3, 4, 5, 4, 3, 3, 4, 4, 3, 5, 4, 3],
         'categorie': ['4★ Sup','4★','4★','4★','4★','3★','4★','5★','5★','4★','4★','3★','3★','4★','4★','4★','3★','4★','4★','4★','3★','4★','4★','4★'],
         # Saisonnalité : 1=resort/côtier/montagne (haute saison), 0=urbain/année ronde
-        # Réf. : Pulina & Santoni (2018) ; Cracolici et al. (2008)
         'saison_dummy': [1,1,1,1,1,1,1,1,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,1],
         'energy_kwh': [2190000, 2883500, 1679000, 3120750, 2646250, 2764875, 2482000, 1642500, 2500250, 3248500, 3650000, 1596875, 1815875, 1359625, 2628000, 2354250, 7245250, 2737500, 3129875, 2016625, 1669875, 930750, 4973125, 7290875],
         'water_m3': [43800, 57670, 33580, 62415, 52925, 55298, 49640, 32850, 50005, 64970, 73000, 31938, 36318, 27193, 52560, 47085, 144905, 54750, 62598, 40333, 33398, 18615, 99463, 145818],
@@ -2081,7 +2075,7 @@ if uploaded_file is not None:
             f"dans : {', '.join(NUMERIC_COLS)}"
         )
 
-    # ── Détection valeurs négatives ou nulles (Pastor 1996 / Tone 2001) ──────
+    # ── Détection valeurs négatives ou nulles ──────
     _neg_issues = []
     for _col in ['revpar', 'taux_occupation', 'nb_lits', 'nb_employes']:
         if _col in df.columns:
@@ -2254,12 +2248,12 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
     else:
         st.success("✅ Analyse terminée !")
 
-        # Signal Pastor (1996) si translation appliquée
+        # Signal Pastor si translation appliquée
         if getattr(dea, 'translation_applied', {}):
             _trans = dea.translation_applied
             _detail = ', '.join(f'{k} (décalage +{v})' for k, v in _trans.items())
             st.info(
-                f"ℹ️ **Translation invariance appliquée — Pastor (1996)** : {_detail}. "
+                f"ℹ️ **Translation invariance appliquée — Pastor** : {_detail}. "
                 "Valeurs non strictement positives détectées et corrigées automatiquement. "
                 "BCC-VRS est translation-invariant pour les outputs — scores valides. "
                 "Scores CCR calculés sur données originales (CCR non translation-invariant)."
@@ -2314,7 +2308,7 @@ with tab_board:
 
     # ── Alerte ratio DMUs/variables ──────────────────────────────────────────
     if getattr(dea, '_dmu_ratio_warning', False):
-        st.warning(f"⚠️ **Ratio DMUs/variables insuffisant** : {dea._dmu_ratio_info} — Réf. : Raab & Lichty (2002).")
+        st.warning(f"⚠️ **Ratio DMUs/variables insuffisant** : {dea._dmu_ratio_info}")
 
     # ── Header contextuel ────────────────────────────────────────────────────
     _orient_lbl = "📥 Input-Oriented" if getattr(dea, 'orientation', 'input') == 'input' else "📤 Output-Oriented"
@@ -2348,7 +2342,7 @@ with tab_board:
         _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
         _up_fte += _se * avg_salary / 1000
         # CA = RevPAR × chambres × jours. Ne PAS multiplier par le taux
-        # d'occupation : RevPAR = ADR × OCC l'intègre déjà (USALI / Kimes 1989).
+        # d'occupation : RevPAR = ADR × OCC l'intègre déjà.
         _ca_tot += _rvp * _lits * jours_exploit * revpar_value / 1_000_000
         _up_rev += _sr  * _lits * jours_exploit * revpar_value / 1_000_000
         _up_gop += _sr  * _lits * jours_exploit * revpar_value * ft_pct / 1_000_000
@@ -2541,7 +2535,7 @@ with tab_board:
     q_summary = dea.get_quadrant_summary()
     st.dataframe(q_summary.drop(columns=['Hôtels'], errors='ignore'), use_container_width=True, hide_index=True)
     st.markdown('<p class="section-title">Détection Outliers — Distance de Mahalanobis</p>', unsafe_allow_html=True)
-    st.caption("Poldrugovac et al. (2016) — D² ∼ χ²(k). Outlier si p < 0.01.")
+    st.caption("D² ∼ χ²(k). Outlier si p < 0.01.")
     _mah_df = dea.detect_outliers_mahalanobis(threshold_p=0.01)
     _n_out  = _mah_df['Outlier'].sum()
     if _n_out > 0:
@@ -2550,8 +2544,7 @@ with tab_board:
         st.success("✅ Aucun outlier (p > 0.01) — compset homogène.")
     st.dataframe(_mah_df, use_container_width=True, hide_index=True)
 
-    st.caption("📚 *Réf. : Charnes, Cooper & Rhodes (1978) · Banker et al. (1984) · "
-               "Poldrugovac et al. (2016) Mahalanobis · Hwang & Yoon (1981) TOPSIS.*")
+
 
 
 # ── Recommandations SBM par variable ─────────────────────────────────────────
@@ -2614,7 +2607,6 @@ def _sbm_dominant_analysis(sbm_hotel: dict, dea, hotel: str) -> dict:
 with tab_kpi:
     st.markdown('<p class="section-title">Distribution des scores d\'efficacité</p>', unsafe_allow_html=True)
 
-    # ── Signal benchmark % hôtels efficients (Poldrugovac et al. 2016 ; papier Via@ 2013) ──
     _n_eff_t2  = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
     _pct_eff   = _n_eff_t2 / dea.n
 
@@ -2687,14 +2679,13 @@ with tab_kpi:
     )
     st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # ── SBM — Score non-radial (Tone 2001) ───────────────────────────────────
-    st.markdown('<p class="section-title">📐 SBM — Score non-radial (Tone 2001)</p>', unsafe_allow_html=True)
+    # ── SBM — Score non-radial ───────────────────────────────────
+    st.markdown('<p class="section-title">📐 SBM — Score non-radial</p>', unsafe_allow_html=True)
     st.caption(
         "SBM (Slack-Based Measure) mesure l'inefficience directement via les slacks inputs ET outputs. "
         "Contrairement à BCC/CCR (modèles radiaux), SBM gère nativement les GOP négatifs, "
         "RevPAR nuls et variables d'environnement non-positives — idéal pour les actifs en difficulté "
-        "ou en repositionnement. ⚠️ Score NON comparable au score BCC. "
-        "Réf. : Tone (2001) EJOR ; Tone & Tsutsui (2010)."
+        "ou en repositionnement. ⚠️ Score NON comparable au score BCC."
     )
     if st.button("🔄 Calculer SBM (tous les hôtels)", key="sbm_btn_t2"):
         with st.spinner("Calcul SBM en cours…"):
@@ -2783,7 +2774,7 @@ with tab_topsis:
     _adv_col1, _adv_col2 = st.columns(2)
 
     with _adv_col1:
-        st.markdown("**Super-Efficience — Andersen & Petersen (1993)**")
+        st.markdown("**Super-Efficience — Andersen & Petersen**")
         st.caption(
             "Les DMUs efficients (BCC=1) reçoivent un score > 1 : "
             "ils pourraient consommer plus d'inputs tout en restant hors de la frontière "
@@ -2828,7 +2819,7 @@ with tab_topsis:
             st.plotly_chart(fig_se, use_container_width=True)
 
     with _adv_col2:
-        st.markdown("**Cross-Efficience — Doyle & Green (1994)**")
+        st.markdown("**Cross-Efficience — Doyle & Green**")
         st.caption(
             "Chaque DMU est évalué par les poids optimaux de TOUS ses pairs. "
             "Élimine le choix arbitraire des poids. "
@@ -2902,12 +2893,12 @@ with tab_topsis:
     if st.session_state.get("se_results") is not None and st.session_state.get("ce_results") is not None:
         st.markdown("---")
         st.markdown('<p class="section-title">Tableau de Décision Consolidé — BCC · Super-Eff. · Cross-Eff. · TOPSIS</p>', unsafe_allow_html=True)
-        st.caption("Doyle & Green (1994) · Andersen & Petersen (1993) — Un actif robuste est performant sur les 4 dimensions.")
-        with st.expander("ℹ️ Limites de la cross-efficience — Assurance Regions (Thompson et al., 1990)"):
+        st.caption("Un actif robuste est performant sur les 4 dimensions.")
+        with st.expander("ℹ️ Limites de la cross-efficience — Assurance Regions"):
             st.markdown(
                 """
 La cross-efficience traite les poids arbitraires **ex-post** (après optimisation).
-Les **Assurance Regions** (Thompson et al., 1990) les contraignent **ex-ante** dans le LP :
+Les **Assurance Regions** les contraignent **ex-ante** dans le LP :
 
 > Exemple : `0.10 ≤ u_satisfaction / u_RevPAR ≤ 0.50`
 
@@ -3008,8 +2999,6 @@ la réponse ne changera pas le diagnostic. Le score sera différent, la prescrip
 |---|---|---|
 | TGR faible | Segment structurellement défavorable | Cession · Repositionnement · Extension |
 | TGR élevé | Bon segment, problème d'échelle conjoncturel | Croissance · Mix produit |
-
-Réf. : Assaf, Barros & Josiassen (2010) — metafrontière GTE/MTE/TGR.
                 """
             )
     with col2:
@@ -3226,7 +3215,7 @@ with tab_fiche:
 
     # ── SBM — Analyse non-radiale Fiche Actif ────────────────────────────────
     st.markdown("---")
-    st.markdown('<p class="section-title">📐 SBM — Analyse non-radiale (Tone 2001)</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">📐 SBM — Analyse non-radiale</p>', unsafe_allow_html=True)
     st.caption(
         "SBM mesure l'inefficience via les slacks directement — sans contraction radiale. "
         "Recommandé pour les actifs avec données non-positives (GOP < 0, RevPAR nul). "
@@ -3317,17 +3306,16 @@ with tab_fiche:
         if _has_neg:
             st.info(
                 "🔢 Données non-positives détectées sur cet actif — "
-                "le score SBM est calculé via range normalization (Tone & Tsutsui 2010) "
-                "et reste valide. Le score BCC a également bénéficié de la translation invariance Pastor (1996)."
+                "le score SBM est calculé via range normalization "
+                "et reste valide. Le score BCC a également bénéficié de la translation invariance Pastor."
             )
 
-    # ── Plan B — Inputs non-discrétionnaires (Banker & Morey 1986) ──────────
     st.markdown("---")
     st.markdown('<p class="section-title">🔒 Plan B — Variables structurellement fixes</p>', unsafe_allow_html=True)
     st.caption(
         "Certains inputs ne peuvent pas être réduits à court terme (nb_lits, surface, CAPEX). "
         "Verrouillez-les : le modèle recalcule les cibles de rattrapage sur les variables "
-        "discrétionnaires restantes. Réf. : Banker & Morey (1986) Management Science."
+        "discrétionnaires restantes."
     )
 
     _nd_fixed = st.multiselect(
@@ -3445,14 +3433,12 @@ with tab_fiche:
 
     # ══════════════════════════════════════════════════════════════════════════
     # SIMULATEUR WHAT-IF — Recalcul DEA réel (Option B + C)
-    # Réf. : Charnes et al. (1978), Banker et al. (1984)
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown('<p class="section-title">🔬 Simulateur What-If — Impact sur le Score BCC</p>', unsafe_allow_html=True)
     st.caption(
         "Modifiez les paramètres de l'hôtel et recalculez son score BCC réel (recalcul DEA complet, "
-        "pas d'interpolation). La frontière d'efficience est recalculée sur l'ensemble du compset modifié. "
-        "Réf. : Charnes, Cooper & Rhodes (1978), Banker, Charnes & Cooper (1984)."
+        "pas d'interpolation). La frontière d'efficience est recalculée sur l'ensemble du compset modifié."
     )
 
     _wi_raw  = dea.df.loc[selected]
@@ -3568,7 +3554,7 @@ with tab_fiche:
             type="primary",
             disabled=not _changed,
             help="Relance le calcul DEA complet avec les paramètres modifiés. "
-                 "Recalcul réel, pas d'interpolation — Charnes et al. (1978)."
+                 "Recalcul réel, pas d'interpolation."
         )
 
     if _wi_run or st.session_state.get("wi_last_result") and not _changed:
@@ -3646,7 +3632,7 @@ with tab_fiche:
                     f"<div style='font-size:1.1rem;color:{_color};margin-top:4px;'>"
                     f"Δ = {_delta:+.1%} ({_delta*100:+.1f} pts)</div>"
                     f"<div style='font-size:0.8rem;color:#555;margin-top:6px;'>"
-                    f"Recalcul DEA réel · Charnes et al. (1978) BCC</div>"
+                    f"Recalcul DEA réel · BCC</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -3663,9 +3649,8 @@ with tab_fiche:
                 st.info(f"➡️ **Impact limité** ({_delta:+.1%}) — les modifications ont peu d'effet sur le score BCC. L'inefficience vient d'autres leviers.")
 
     st.caption(
-        "📚 *Réf. : Charnes, Cooper & Rhodes (1978) CCR · Banker, Charnes & Cooper (1984) BCC · "
         "Recalcul LP réel via PuLP/CBC — pas d'interpolation. "
-        "Résultat valide uniquement pour l'hôtel sélectionné, frontière définie par le compset inchangé.*"
+        "Résultat valide uniquement pour l'hôtel sélectionné, frontière définie par le compset inchangé."
     )
 
 # ══════════════════════════════════════════════
@@ -3689,7 +3674,7 @@ with tab_meta:
             if _sil is not None:
                 _sil_label = 'excellent' if _sil > 0.7 else ('bon' if _sil > 0.5 else ('moyen' if _sil > 0.3 else 'faible'))
                 st.metric('Silhouette Score (k=4)', f'{_sil:.3f}',
-                          help='Rousseeuw (1987). >0.7=excellent | 0.5-0.7=bon | 0.3-0.5=moyen | <0.3=faible — remettre k en question')
+                          help='Rousseeuw. >0.7=excellent | 0.5-0.7=bon | 0.3-0.5=moyen | <0.3=faible — remettre k en question')
                 st.caption(f'Qualité clustering : **{_sil_label}**')
         with _sil_col2:
             if _inertias:
@@ -3747,7 +3732,7 @@ with tab_meta:
 
     st.markdown('<p class="section-title">🌐 Metafrontière — Analyse GTE / MTE / TGR</p>', unsafe_allow_html=True)
     st.info("""
-**Principe (Assaf et al., 2010) :**
+**Principe :**
 - **GTE** — efficience relative au meilleur modèle opératoire de son groupe (pairs du même segment)
 - **MTE** — efficience relative au meilleur modèle opératoire observé dans tout le compset
 - **TGR** (MTE/GTE) — écart entre le modèle opératoire du groupe et le meilleur modèle connu
@@ -3758,7 +3743,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     st.caption(
         "**Recommandation méthodologique :** si votre portefeuille mélange des catégories "
         "(urban/resort, 3★/5★), utilisez la segmentation ci-dessous pour corriger le biais "
-        "inter-groupes (Assaf et al. 2010). Si votre compset est homogène, tous les hôtels "
+        "inter-groupes. Si votre compset est homogène, tous les hôtels "
         "appartiennent au même groupe — GTE = MTE pour tous, sans impact sur les scores."
     )
     seg_options = {'🏠 Taille (auto depuis nb_lits)': 'taille'}
@@ -3770,8 +3755,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     seg_label = st.selectbox(
         "Dimension de segmentation",
         options=list(seg_options.keys()),
-        help="Choisir la dimension qui définit les groupes homogènes dans votre compset. "
-             "Réf. : Assaf, Barros & Josiassen (2010) — metafrontière bootstrappée."
+        help="Choisir la dimension qui définit les groupes homogènes dans votre compset."
     )
     seg_key = seg_options[seg_label]
     groups = dea.get_auto_size_groups() if seg_key == 'taille' else dea.df[seg_key].rename('groupe')
@@ -3835,17 +3819,15 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     st.info(
         "💡 **Peers restreints au segment pertinent via GTE** — la frontière intra-groupe "
         "garantit que chaque hôtel est évalué contre ses vrais comparables (même segment). "
-        "Restreindre manuellement les peers est redondant avec cette mécanique. "
-        "Réf. : Assaf, Barros & Josiassen (2010) Table 3.",
+        "Restreindre manuellement les peers est redondant avec cette mécanique.",
     )
 
-    # ── ANOVA second stage (Poldrugovac 2016 ; Assaf 2009) ────────────────────────
     st.markdown("---")
     st.markdown('<p class="section-title">ANOVA Second Stage -- Differences efficience entre groupes</p>', unsafe_allow_html=True)
-    st.caption('Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
+    st.caption('Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
 
     try:
-        # Mann-Whitney (Yu 2012) + ANOVA classique
+        # Mann-Whitney + ANOVA classique
         _mw_res = mann_whitney_groups(dea, groups)
         if 'error' not in _mw_res:
             col_a1, col_a2 = st.columns([3, 1])
@@ -3860,7 +3842,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
                 st.caption(_mw_res['test'])
             st.info('*** p<0.01  ** p<0.05  * p<0.10  ns = non significatif. '
                     'Test non-paramétrique recommandé pour scores DEA censurés en 1.0 '
-                    '(Simar & Wilson 2007 ; Yu 2012).')
+                    '.')
         else:
             _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
             st.dataframe(_anova_summ, use_container_width=True, hide_index=True)
@@ -3868,10 +3850,9 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     except Exception as _e:
         st.info(f"ANOVA non disponible : {_e}")
 
-    # ── Bootstrap Metafrontière (Assaf 2009 ; Simar & Wilson 2007) ─────────────
     st.markdown("---")
     st.markdown('<p class="section-title">Bootstrap Metafrontière — Intervalles de confiance IC 95%</p>', unsafe_allow_html=True)
-    st.caption("Assaf, Barros & Josiassen (2009) ; Simar & Wilson (2007) — 2000 itérations dans le papier original. Ici 200 itérations pour performance. IC 95% sur GTE, MTE, TGR.")
+    st.caption("2000 itérations dans le papier original. Ici 200 itérations pour performance. IC 95% sur GTE, MTE, TGR.")
 
     _n_boot = st.slider("Nombre d'itérations bootstrap", min_value=50, max_value=500, value=100, step=50, key="meta_bootstrap_n")
     if st.button("🔄 Lancer Bootstrap Metafrontière", key="meta_boot_btn"):
@@ -3892,10 +3873,9 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
         st.dataframe(_bdf[_boot_cols_avail].sort_values('TGR'), use_container_width=True, hide_index=True)
         st.caption("IC bas / IC haut = quantiles 2.5% et 97.5% des scores bootstrap. Un IC large indique une incertitude statistique élevée sur le score.")
 
-    # ── KPIs enrichis — Market share + Guests/ETP (Assaf 2009) ───────────
     st.markdown("---")
     st.markdown('<p class="section-title">KPIs Enrichis — Market Share & Productivité du Travail</p>', unsafe_allow_html=True)
-    st.caption("Assaf et al. (2009) Table 2 — Market share intra-compset | Guests/ETP = nb nuitées / ETP (productivité travail).")
+    st.caption("Market share intra-compset | Guests/ETP = nb nuitées / ETP (productivité travail).")
 
     _enr_df = dea.compute_enriched_kpis()
     st.dataframe(_enr_df, use_container_width=True, hide_index=True)
@@ -3913,7 +3893,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
             marker=dict(size=10, color=_color), showlegend=False,
         ))
     fig_ms.update_layout(
-        title="Market Share intra-compset vs Efficience BCC (Assaf et al. 2009)",
+        title="Market Share intra-compset vs Efficience BCC",
         xaxis=dict(title="Market Share (%)"),
         yaxis=dict(title="Score BCC", tickformat='.0%', range=[0.3, 1.08]),
         height=400, paper_bgcolor='rgba(0,0,0,0)',
@@ -4127,7 +4107,7 @@ with tab_capital:
             capex_ch = round(capex_ke * 1000 / lits, 0)  if lits > 0    else None
             # CA = RevPAR × chambres disponibles × jours.
             # Ne PAS multiplier par le taux d'occupation : RevPAR = ADR × OCC
-            # l'intègre déjà (HOST/USALI ; Kimes 1989). Multiplier à nouveau
+            # l'intègre déjà. Multiplier à nouveau
             # sous-estimait le CA d'environ 25 %.
             rev_est  = revpar * jours_exploit * lits
             rendement= round(rev_est / (capex_ke * 1000), 2) if capex_ke > 0 else None
@@ -4347,11 +4327,11 @@ with tab_capital:
                 st.info("Données capital insuffisantes pour le calcul DEA Capital (surface + CAPEX + revenus requis).")
     
     
-    # ── MDEA Room / F&B Decomposition (Yu 2012) ─────────────────────────
+    # ── MDEA Room / F&B Decomposition ─────────────────────────
     st.markdown("---")
-    st.markdown('<p class="section-title">🏨 Décomposition Room / F&B — MDEA (Yu 2012)</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">🏨 Décomposition Room / F&B — MDEA</p>', unsafe_allow_html=True)
     st.caption(
-        "Yu, M.-M. (2012) Current Issues in Tourism 15(5), 461-476. "
+        "Yu, M.-M. Current Issues in Tourism 15(5), 461-476. "
         "Décompose l'efficience globale en efficience Hébergement et efficience F&B. "
         "Localise la source d'inefficience par département. "
         "Nécessite : rooms_cost + rooms_revenue + fb_cost + fb_revenue dans le CSV."
@@ -4422,7 +4402,7 @@ with tab_capital:
             fig_rf.add_annotation(x=0.95, y=0.65, text="Room > F&B",
                                    showarrow=False, font=dict(size=9, color="#f39c12"))
             fig_rf.update_layout(
-                title="BCC Room vs BCC F&B — Localisation de l'inefficience (Yu 2012)",
+                title="BCC Room vs BCC F&B — Localisation de l'inefficience",
                 xaxis=dict(title="BCC Hébergement (Room)", range=[0.5,1.05]),
                 yaxis=dict(title="BCC Restauration (F&B)", range=[0.5,1.05]),
                 height=420, paper_bgcolor="rgba(0,0,0,0)",
@@ -4433,7 +4413,7 @@ with tab_capital:
                 "Au-dessus de la diagonale : F&B plus efficient que Hébergement. "
                 "En dessous : Hébergement plus efficient. "
                 "Sur la diagonale : performance équilibrée entre les deux divisions. "
-                "Source : Yu (2012) — l'efficience globale = moyenne pondérée Room + F&B."
+                "Source : Yu — l'efficience globale = moyenne pondérée Room + F&B."
             )
 
             # Export CSV
@@ -4975,8 +4955,7 @@ with tab_malm:
         with st.expander("⚙️ Correction inflation (optionnel — recommandé)"):
             st.caption(
                 "L'inflation sur les charges op' et le RevPAR peut simuler un Frontier Shift "
-                "artificiel. Renseignez le taux d'inflation entre N-1 et N pour corriger. "
-                "Réf. : Färe, Grosskopf, Norris & Zhang (1994)."
+                "artificiel. Renseignez le taux d'inflation entre N-1 et N pour corriger."
             )
             _deflate_on = st.checkbox("Appliquer la correction inflation", value=False)
             _inflation_rate = st.number_input(
@@ -5162,9 +5141,8 @@ with tab_malm:
     st.markdown('---')
     st.markdown('''<p class="section-title">🧪 Stage 2 — Déterminants de l'Efficience</p>''', unsafe_allow_html=True)
     st.caption(
-        "Deux estimateurs complémentaires : Tobit censuré (Tobin 1958) pour la lisibilité, "
-        "Simar-Wilson (2007) pour la robustesse statistique. "
-        "Variables financières et de saisonnalité issues de Pulina & Santoni (2018)."
+        "Deux estimateurs complémentaires : Tobit censuré pour la lisibilité, "
+        "Simar-Wilson pour la robustesse statistique."
     )
 
     # ── Calcul variables dérivées Stage 2 ────────────────────────────────────
@@ -5177,7 +5155,6 @@ with tab_malm:
         'nb_lits'           : 'Nombre de chambres',
         'log_nb_lits'       : 'Taille — log(nb chambres)',
         'surface_m2'        : 'Surface totale (m²)',
-        # Financières — Pulina & Santoni (2018)
         'ltv_proxy'         : 'Intensité capital / CA (proxy LTV %)',
         'asset_yield'       : 'Rendement actifs CA/BV (proxy ROA)',
         'capex_per_room'    : 'CAPEX par chambre (k€)',
@@ -5281,14 +5258,14 @@ with tab_malm:
                 "chaque étoile supplémentaire améliore le score BCC de 0.08 points "
                 "toutes choses égales par ailleurs (ETP, charges, localisation inchangés). "
                 "Le Tobit corrige le biais d'estimation lié au plafond BCC=1.0 "
-                "(Simar & Wilson 2007)."
+                "."
             )
         elif st.session_state.get("tobit_results") and "error" in st.session_state["tobit_results"]:
             st.error(st.session_state["tobit_results"]["error"])
 
-    # ── SIMAR-WILSON (2007) ───────────────────────────────────────────────────
+    # ── SIMAR-WILSON ───────────────────────────────────────────────────
     st.markdown("---")
-    st.markdown('''<p class="section-title">📐 Simar-Wilson (2007) — Régression Tronquée Bootstrappée</p>''', unsafe_allow_html=True)
+    st.markdown('''<p class="section-title">📐 Simar-Wilson — Régression Tronquée Bootstrappée</p>''', unsafe_allow_html=True)
 
     with st.expander("ℹ️ Différence Tobit vs Simar-Wilson", expanded=False):
         st.markdown("""
@@ -5299,8 +5276,6 @@ with tab_malm:
 | Standard errors | Hessien numérique | **Bootstrap paramétrique** B=200 |
 | IC 95% | Non disponible | **Percentiles 2.5/97.5** |
 | Usage recommandé | Lecture rapide, interprétation | **Publication, validation** |
-
-*Réf. : Simar & Wilson (2007) Journal of Econometrics 136(1), 31-64*
         """)
 
     _sw_selected = st.multiselect(
@@ -5497,7 +5472,7 @@ sont automatiquement mappées vers les noms standard des modules.*
         ("2. Quadrants gestion x échelle",   True,           ""),
         ("3. Classement TOPSIS",             True,           ""),
         ("4. Super-efficience",              True,           ""),
-        ("5. SBM (Tone 2001)",               True,           ""),
+        ("5. SBM",               True,           ""),
         ("6. Slacks & gaspillages",          True,           ""),
         ("7. Métafrontière GTE/MTE/TGR",     True,           ""),
         ("8. Déterminants (Simar-Wilson)",   _has_sw,
@@ -5763,22 +5738,7 @@ st.markdown(
     """<div style='text-align:center;color:#94a3b8;font-size:0.75rem;line-height:1.8;padding:0.5rem 0;'>
     <b>DEA-H v3.9 · REIV Hospitality · Mehdi Sayyou</b><br>
     Modèles : BCC/CCR Input/Output-Oriented · TOPSIS Shannon entropy · K-means · Metafrontière GTE/MTE/TGR ·
-    Malmquist TFP (Catch-up × Frontier Shift) · Tobit Second Stage · Multi-Module DEA (7 dimensions)<br>
-    <b>Références :</b>
-    Charnes, Cooper &amp; Rhodes (1978) CCR ·
-    Banker, Charnes &amp; Cooper (1984) BCC ·
-    Barros (2005) format Barros ·
-    Min, Min &amp; Joo (2009) USALI ·
-    Assaf, Barros &amp; Josiassen (2010) Metafrontière ·
-    Shang, Wang &amp; Hung (2010) Stochastic DEA ·
-    Yu (2012) MDEA Room/F&amp;B · Mann-Whitney ·
-    Simar &amp; Wilson (2007) Tobit bootstrap ·
-    Caves, Christensen &amp; Diewert (1982) Malmquist ·
-    Färe, Grosskopf, Norris &amp; Zhang (1994) Décomposition TFP ·
-    Poldrugovac, Tekavcic &amp; Jankovic (2016) Mahalanobis ·
-    Vlad, Toma &amp; Fîntîneru (2026) TOPSIS entropy ·
-    Shirouyehzad et al. (2012) SERVQUAL ·
-    Via@ (2013) Benchmark 15–25% · Alpha opérateur
+    Malmquist TFP (Catch-up × Frontier Shift) · Tobit Second Stage · Multi-Module DEA (7 dimensions)
     </div>""",
     unsafe_allow_html=True,
 )
