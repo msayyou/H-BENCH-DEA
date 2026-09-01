@@ -406,6 +406,14 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     story.append(HRFlowable(width="55%", thickness=2, color=NAVY, spaceAfter=18))
     story.append(Paragraph(f"{dea.n} hôtels analysés", cover_sub))
     story.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}", cover_sub))
+    if illustrative_data:
+        story.append(Spacer(1, 0.6*cm))
+        story.append(Paragraph(
+            "⚠️ DONNÉES ILLUSTRATIVES — tout ou partie des chiffres de ce rapport sont "
+            "des estimations, pas des données vérifiées par le client. Les scores "
+            "présentés ne sont pas des résultats définitifs.",
+            S("illustrative_warn", fontSize=10, textColor=colors.HexColor("#B00020"),
+              alignment=TA_CENTER, fontName="Helvetica-Bold")))
     story.append(Spacer(1, 2.5*cm))
     story.append(Paragraph(
         "REIV Hospitality &#183; DEA-H v4",
@@ -1633,6 +1641,16 @@ with st.sidebar:
         "Jours d'exploitation / an",
         value=365, min_value=30, max_value=365, step=1, format="%i",
         help="Resort saisonnier : 180-240 | Urban : 340-365. Corrige PAR, GOPPAM, TREVPAR."
+    )
+    st.markdown("---")
+    illustrative_data = st.checkbox(
+        "⚠️ Données illustratives (pas encore vérifiées)",
+        value=False,
+        help="À cocher si tout ou partie des données saisies sont des estimations/"
+             "approximations plutôt que des chiffres confirmés par le client. Affiche "
+             "un bandeau d'avertissement dans l'app et sur le rapport PDF, pour éviter "
+             "qu'un résultat basé sur des données illustratives soit lu comme un "
+             "résultat vérifié.",
     )
 
     _ft_int = st.slider(
@@ -5071,6 +5089,13 @@ Aucun résultat disponible pour l'instant.
 sont automatiquement mappées vers les noms standard des modules.*
 """)
     else:
+        if illustrative_data:
+            st.error(
+                "⚠️ **Données illustratives** — les résultats affichés ci-dessous reposent "
+                "en tout ou partie sur des estimations, pas sur des données vérifiées par "
+                "le client. Les scores ne doivent pas être présentés comme des résultats "
+                "définitifs."
+            )
         render_synthesis_tab(_module_results, dmu_col="hotel_name")
 
     # ══════════════════════════════════════════════════════════════════════
