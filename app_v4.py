@@ -16,7 +16,7 @@ from modules_config import MODULES, check_module_feasibility
 from dea_model import run_multi_module
 from synthesis_tab import render_synthesis_tab, render_module_selector
 # --- pdf_fiche_actif inline ---
-from io import BytesIO
+from io import BytesIO, StringIO
 from datetime import datetime
 import numpy as np
 
@@ -1926,6 +1926,44 @@ with st.sidebar.expander("👁️ Aperçu données", expanded=False):
 # + mapper les colonnes standard DEA-H vers les noms attendus par modules_config
 _df_mm = df.reset_index().rename(columns={"hotel_name": "hotel_name"})
 
+# ── Enrichissement optionnel : vraies données pour débloquer les modules ────
+# check_module_feasibility bloque désormais un module tant que ses colonnes
+# "required" ne sont pas de la vraie donnée (cf. _proxy_cols plus bas). La
+# seule façon légitime de débloquer Financier USALI / Capital & Actifs /
+# Main-d'œuvre / Revenue Management / ESG est de fournir les colonnes
+# réelles ci-dessous — pas de contourner le contrôle.
+with st.sidebar.expander("📂 Enrichir avec données réelles (débloquer des modules)", expanded=False):
+    st.caption(
+        "Colonnes attendues (ordre libre, uniquement celles que vous avez) : "
+        "**hotel_name** puis parmi — "
+        "`nb_rooms` (Opérationnel) · "
+        "`rooms_revenue`/`rooms_cost`/`fb_cost`/`fb_revenue`/`other_dept_cost`/`other_dept_revenue`/`undistributed_expenses`/`fixed_charges`/`ebitda` (Financier USALI) · "
+        "`total_revenue`/`book_value_assets` (Capital & Actifs) · "
+        "`payroll_total`/`hours_worked`/`training_cost` (Main-d'œuvre) · "
+        "`marketing_cost`/`ota_gds_cost`/`sales_fte`/`promo_budget`/`trevpar`/`adr` (Revenue Management) · "
+        "`energy_kwh`/`water_m3`/`co2_tonnes`/`waste_tonnes` (ESG).  \n"
+        "La colonne `hotel_name` doit correspondre exactement aux noms du fichier DEA-H principal."
+    )
+    _enrich_upload = st.file_uploader("Fichier d'enrichissement (CSV ou Excel)", type=["csv", "xlsx", "xls"], key="mm_enrich_upload")
+    if _enrich_upload is not None:
+        try:
+            if _enrich_upload.name.endswith((".xlsx", ".xls")):
+                _enrich_df = pd.read_excel(_enrich_upload)
+            else:
+                _enrich_raw = _enrich_upload.getvalue().decode("utf-8-sig")
+                _enrich_df = pd.read_csv(StringIO(_enrich_raw))
+            if "hotel_name" not in _enrich_df.columns:
+                st.error("Colonne `hotel_name` introuvable dans le fichier importé.")
+            else:
+                _matched = _enrich_df["hotel_name"].isin(_df_mm["hotel_name"]).sum()
+                _new_cols = [c for c in _enrich_df.columns if c != "hotel_name"]
+                _df_mm = _df_mm.merge(_enrich_df, on="hotel_name", how="left", suffixes=("", "_enrichi"))
+                st.success(f"{_matched}/{len(_enrich_df)} hôtels appariés · colonnes ajoutées : {', '.join(_new_cols)}")
+                if _matched < len(_enrich_df):
+                    st.warning("Certains noms d'hôtel du fichier importé ne correspondent à aucun hôtel du fichier DEA-H principal — vérifiez l'orthographe exacte.")
+        except Exception as _e:
+            st.error(f"Import impossible : {_e}")
+
 # Mapping automatique colonnes DEA-H v3 → noms standard modules_config
 _COL_ALIAS = {
     "nb_lits"         : "nb_rooms",
@@ -1945,14 +1983,24 @@ for old, new in _COL_ALIAS.items():
         _df_mm[new] = _df_mm[old]
 
 # ── Colonnes calculées automatiquement ──────────────────────────────────────
-# Chaque colonne créée ici est une reformulation arithmétique d'une colonne
-# déjà utilisée ailleurs (RevPAR, occupation) — pas une donnée nouvelle.
-# Elle est trackée dans _proxy_cols pour ne PAS pouvoir satisfaire, seule,
-# un champ "required" d'un module (cf. check_module_feasibility) : un module
-# comme Financier USALI ne doit pas se déclarer calculable sur un simple
-# rooms_revenue = RevPAR × chambres × 365 sans jamais voir de vraie donnée
-# départementale (rooms_cost, fb_cost, total_revenue réel...).
+# Chaque colonne créée ici est soit une reformulation arithmétique (RevPAR ×
+# lits × 365...), soit un alias qui substitue une métrique DIFFÉRENTE plutôt
+# que de la renommer à l'identique — dans les deux cas ce n'est pas une donnée
+# nouvelle. Trackée dans _proxy_cols pour ne PAS pouvoir satisfaire, seule, un
+# champ "required" (cf. check_module_feasibility) : un module ne doit pas se
+# déclarer calculable sur une reformulation ou une substitution, mais
+# uniquement sur une vraie donnée.
+#
+# nb_lits → nb_rooms est dans ce cas : ce n'est PAS un renommage 1:1 (à
+# l'inverse de nb_employes→fte_total ou taux_occupation→occupancy_rate, qui
+# sont la même donnée sous un autre nom) — un lit n'est pas une chambre.
+# Aucune colonne de l'écran d'upload DEA-H ne contient de vrai nombre de
+# chambres ; tant qu'un utilisateur n'en fournit pas une explicitement,
+# "nb_rooms" reste une substitution, pas une donnée.
 _proxy_cols = set()
+if "nb_rooms" in _df_mm.columns and "nb_lits" in _df_mm.columns:
+    if (_df_mm["nb_rooms"] == _df_mm["nb_lits"]).all():
+        _proxy_cols.add("nb_rooms")
 
 # ADR = RevPAR / (TO/100)  — toujours calculable depuis le dataset DEA-H base
 if "revpar" in _df_mm.columns and "occupancy_rate" in _df_mm.columns:
@@ -2014,7 +2062,7 @@ if 'dea' in st.session_state:
 _available_mm = [c for c in _df_mm.columns if c != "hotel_name"]
 
 # Sélecteur sidebar
-_active_modules, _variable_overrides = render_module_selector(_available_mm)
+_active_modules, _variable_overrides = render_module_selector(_available_mm, proxy_cols=_proxy_cols)
 st.session_state["active_modules_mm"]    = _active_modules
 st.session_state["variable_overrides_mm"] = _variable_overrides
 
@@ -5012,7 +5060,7 @@ Aucun résultat disponible pour l'instant.
 
 | Colonne | Description |
 |---------|-------------|
-| `nb_rooms` | Nombre de chambres |
+| `nb_rooms` | Nombre de chambres (lits DEA-H utilisés par défaut si absent) |
 | `fte_total` | ETP totaux |
 | `total_revenue` | CA total (€) |
 | `gop` | GOP (€) |
