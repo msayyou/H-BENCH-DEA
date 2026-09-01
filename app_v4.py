@@ -110,7 +110,7 @@ def generate_fiche_actif_pdf(
     n     = dea.n
 
     raw   = dea.df.loc[hotel]
-    lits  = float(raw["nb_lits"])
+    lits  = float(raw["nb_chambres"])
     emp   = float(raw["nb_employes"])
     costs = float(raw["couts_op_ex"])
     rvp   = float(raw["revpar"])
@@ -199,7 +199,7 @@ def generate_fiche_actif_pdf(
     tgt_out = targets.get("outputs", {})
 
     plan_data = [["Variable", "Actuel", "Cible", "Slack", "Amélioration"]]
-    for col in ["nb_lits", "nb_employes", "couts_op_ex"]:
+    for col in ["nb_chambres", "nb_employes", "couts_op_ex"]:
         cur = float(raw[col])
         tgt = tgt_in.get(col, cur)
         slk = slk_in.get(col, 0)
@@ -687,7 +687,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # quel jeu de variables (mode standard / compact / minimal)
     _VARLAB = {
         'nb_employes'       : "ETP",
-        'nb_lits'           : "Chambres",
+        'nb_chambres'           : "Chambres",
         'couts_op_ex'       : "OpEx",
         'payroll_total'     : "Masse salariale",
         'energy_kwh'        : "Énergie",
@@ -865,12 +865,12 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         try:
             build_stage2_vars(dea)                     # crée les variables dérivées
             # Ordre de priorité : variables structurelles interprétables d'abord.
-            # Une seule variable par famille — log_nb_lits et nb_lits mesurent la
+            # Une seule variable par famille — log_nb_chambres et nb_chambres mesurent la
             # même chose et créeraient une colinéarité quasi parfaite.
-            _cands = ['classement_etoiles', 'saison_dummy', 'log_nb_lits',
+            _cands = ['classement_etoiles', 'saison_dummy', 'log_nb_chambres',
                       'ltv_proxy', 'gop_margin_pct', 'capex_per_room',
                       'asset_yield', 'surface_m2', 'energy_kwh', 'couts_op_ex']
-            _FAM = {'nb_lits': 'taille', 'log_nb_lits': 'taille',
+            _FAM = {'nb_chambres': 'taille', 'log_nb_chambres': 'taille',
                     'surface_m2': 'taille', 'capex_annuel': 'capex',
                     'capex_per_room': 'capex', 'ltv_proxy': 'capex'}
             _n_ineff = sum(1 for s in dea.bcc_scores.values() if s < 1 - 1e-8)
@@ -914,12 +914,12 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         _SWLAB = {
             'classement_etoiles': "Classement (étoiles)",
             'saison_dummy'      : "Saisonnalité (resort = 1)",
-            'log_nb_lits'       : "Taille — log(lits)",
-            'nb_lits'           : "Nombre de lits",
+            'log_nb_chambres'       : "Taille — log(chambres)",
+            'nb_chambres'           : "Nombre de chambres",
             'surface_m2'        : "Surface totale (m²)",
             'ltv_proxy'         : "Intensité capital / CA",
             'gop_margin_pct'    : "Marge GOP (%)",
-            'capex_per_room'    : "CAPEX par lit",
+            'capex_per_room'    : "CAPEX par chambre",
             'asset_yield'       : "Rendement des actifs",
             'energy_kwh'        : "Consommation énergie",
             'payroll_total'     : "Masse salariale",
@@ -1019,10 +1019,10 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                         'classement (★)'    : int(_v(h, 'classement_etoiles', 3) or 3),
                     }
                 _auto_df = pd.DataFrame(_rows_auto).T.loc[dea.hotels]
-                # Détection d'unité : si CAPEX/lit < 0,05 k€, les données
+                # Détection d'unité : si CAPEX/chambre < 0,05 k€, les données
                 # étaient déjà en k€ dans le fichier — on annule la division
                 _med = (_auto_df['capex_annuel (k€)'] /
-                        pd.Series({h: max(_v(h, 'nb_lits'), 1) for h in dea.hotels})).median()
+                        pd.Series({h: max(_v(h, 'nb_chambres'), 1) for h in dea.hotels})).median()
                 if _med < 0.05:
                     _auto_df['capex_annuel (k€)'] *= 1000
                     _auto_df['gop (k€)']          *= 1000
@@ -1046,7 +1046,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             surf  = float(cap_input.loc[h, 'surface_m2'] or 0)
             capex = float(cap_input.loc[h, 'capex_annuel (k€)'] or 0)
             gop   = float(cap_input.loc[h, 'gop (k€)'] or 0)
-            lits  = _v(h, 'nb_lits')
+            lits  = _v(h, 'nb_chambres')
             rvp   = _v(h, 'revpar')
             # CA = RevPAR x lits x jours (RevPAR intègre déjà l'occupation)
             ca    = rvp * lits * jours_exploit / 1000     # k€
@@ -1060,7 +1060,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             })
         cap_rows_pdf.sort(key=lambda r: (r['goppam'] is None, -(r['goppam'] or 0)))
 
-        cpd = [["Hôtel", "BCC", "GOPPAM (€/m²)", "CAPEX/lit (k€)", "Rend. CAPEX (x)", "Marge GOP"]]
+        cpd = [["Hôtel", "BCC", "GOPPAM (€/m²)", "CAPEX/chambre (k€)", "Rend. CAPEX (x)", "Marge GOP"]]
         for r in cap_rows_pdf[:14]:
             cpd.append([_clean(r['h'], 36), f"{r['bcc']:.1%}",
                         f"{r['goppam']:.0f}"  if r['goppam']  else "—",
@@ -1170,7 +1170,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             for h in dea.hotels:
                 if h not in cap_input.index:
                     continue
-                lits = _v(h, 'nb_lits')
+                lits = _v(h, 'nb_chambres')
                 ca_n  = _v(h, 'revpar')    * lits * jours_exploit / 1000
                 ca_p  = _v(h, 'revpar_n1') * lits * jours_exploit / 1000
                 gop_n = float(cap_input.loc[h, 'gop (k€)'] or 0)
@@ -1254,7 +1254,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         if _mq is None or _mq.empty:
             story.append(Paragraph(
                 "Analyse non disponible : les colonnes de l'exercice précédent "
-                "(nb_lits_n1, nb_employes_n1, couts_op_ex_n1, revpar_n1, "
+                "(nb_chambres_n1, nb_employes_n1, couts_op_ex_n1, revpar_n1, "
                 "taux_occupation_n1) sont requises dans le fichier source.", body_s))
         else:
             _calc = _mq[_mq['Malmquist TFP'] != '—'].copy()
@@ -1699,7 +1699,7 @@ with st.sidebar:
         "Nombre de variables",
         options=['standard', 'compact', 'minimal'],
         format_func=lambda x: {
-            'standard': f"Standard (3+3) — min 18 hôtels · nb_lits + ETP + OpEx → RevPAR + Sat + TO",
+            'standard': f"Standard (3+3) — min 18 hôtels · nb_chambres + ETP + OpEx → RevPAR + Sat + TO",
             'compact' : f"Compact (2+2) — min 12 hôtels · ETP + OpEx → RevPAR + Satisfaction",
             'minimal' : f"Minimal (2+1) — min 9 hôtels  · ETP + OpEx → RevPAR",
         }[x],
@@ -1741,7 +1741,7 @@ with st.sidebar:
 
     st.markdown("---")
     uploaded_file = st.file_uploader(
-        "Excel ou CSV : hotel_name (1re colonne), nb_lits, nb_employes, "
+        "Excel ou CSV : hotel_name (1re colonne), nb_chambres, nb_employes, "
         "couts_op_ex, revpar, satisfaction, taux_occupation",
         type=['xlsx', 'xls', 'csv'],
         help="Excel recommandé — évite les erreurs de séparateur et les virgules "
@@ -1752,7 +1752,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────
 #  Chargement des données
 # ─────────────────────────────────────────────
-NUMERIC_COLS = ['nb_lits', 'nb_employes', 'couts_op_ex', 'revpar', 'satisfaction', 'taux_occupation']
+NUMERIC_COLS = ['nb_chambres', 'nb_employes', 'couts_op_ex', 'revpar', 'satisfaction', 'taux_occupation']
 
 def load_sample() -> pd.DataFrame:
     """
@@ -1763,7 +1763,7 @@ def load_sample() -> pd.DataFrame:
     """
     d = {
         'hotel_name': ['Meliá South Beach', 'Meliá Calviá Beach', 'Sol Wave House All Suites', 'Sol Barbados', 'Sol House The Studio', 'Sol Guadalupe', 'Innside by Meliá Calviá Beach', 'ME Marbella', 'Meliá Madrid Princesa', 'Meliá Galgos (Madrid)', 'Meliá Castilla (Madrid - Part)', 'Tryp Madrid Gran Vía', 'Tryp Madrid Chamartín', 'Tryp Madrid Atocha', 'Meliá Atlanterra (Cadix)', 'Meliá Sol y Nieve (Sierra Nevada)', 'Sol Pelicanos Ocas (Benidorm)', 'Meliá Puerto de la Cruz (Ténérife)', 'Sol Lanzarote', 'Meliá Sierra Nevada', 'Meliá María Pita (La Corogne)', 'Meliá San Sebastián Orly', 'Meliá Alicante', 'Sol Príncipe (Torremolinos)'],
-        'nb_lits': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
+        'nb_chambres': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
         'nb_employes': [85, 110, 65, 120, 95, 100, 90, 140, 115, 130, 160, 55, 60, 50, 95, 85, 210, 95, 110, 75, 60, 40, 170, 220],
         'couts_op_ex': [3.84, 4.92, 2.88, 5.52, 4.56, 4.68, 4.2, 6.24, 5.16, 5.88, 7.32, 2.52, 2.76, 2.28, 4.32, 4.08, 9.36, 3.96, 4.8, 3.48, 2.64, 1.92, 8.16, 9.72],
         'revpar': [145, 138, 120, 115, 125, 98, 130, 260, 155, 140, 165, 110, 95, 118, 142, 135, 85, 90, 105, 128, 88, 150, 122, 95],
@@ -1793,7 +1793,7 @@ def load_sample() -> pd.DataFrame:
         'revenue_per_fte': [167.9, 156.9, 144.5, 144.0, 154.4, 112.6, 164.7, 122.0, 143.9, 143.5, 165.0, 145.1, 116.5, 142.7, 185.2, 139.2, 147.7, 119.4, 142.5, 122.6, 96.6, 151.2, 162.4, 153.4],
         'book_value_assets': [67200, 56880, 33120, 61560, 52200, 36360, 76160, 50400, 76720, 64080, 112000, 21000, 23880, 26820, 80640, 46440, 95280, 36000, 61740, 39780, 21960, 28560, 98100, 95880],
         'ebitda': [4740.6, 5727.3, 3122.5, 5731.0, 4851.0, 3730.7, 4923.9, 5654.9, 5480.3, 6190.7, 8768.8, 2645.5, 2316.5, 2363.9, 5838.8, 3927.0, 10298.6, 3758.2, 5205.4, 3049.9, 1925.8, 2004.3, 9163.3, 11211.9],
-        'nb_lits_n1': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
+        'nb_chambres_n1': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
         'nb_employes_n1': [86, 108, 65, 121, 94, 101, 87, 143, 115, 126, 163, 55, 58, 49, 92, 82, 208, 92, 110, 72, 61, 40, 164, 212],
         'couts_op_ex_n1': [3.728, 5.037, 2.825, 5.564, 4.566, 4.593, 4.227, 6.33, 5.123, 6.011, 7.184, 2.48, 2.695, 2.265, 4.406, 4.004, 9.331, 4.049, 4.796, 3.501, 2.641, 1.929, 7.978, 9.832],
         'revpar_n1': [136.0, 131.5, 115.7, 106.6, 114.0, 89.9, 124.8, 241.7, 142.3, 131.5, 154.3, 103.9, 86.8, 109.4, 135.2, 123.2, 80.2, 86.0, 96.6, 116.7, 83.2, 140.4, 117.1, 91.8],
@@ -1888,7 +1888,7 @@ if uploaded_file is not None:
 
     # ── Détection valeurs négatives ou nulles (Pastor 1996 / Tone 2001) ──────
     _neg_issues = []
-    for _col in ['revpar', 'taux_occupation', 'nb_lits', 'nb_employes']:
+    for _col in ['revpar', 'taux_occupation', 'nb_chambres', 'nb_employes']:
         if _col in df.columns:
             _neg = (df[_col] <= 0).sum()
             if _neg > 0:
@@ -1966,7 +1966,7 @@ with st.sidebar.expander("📂 Enrichir avec données réelles (débloquer des m
 
 # Mapping automatique colonnes DEA-H v3 → noms standard modules_config
 _COL_ALIAS = {
-    "nb_lits"         : "nb_rooms",
+    "nb_chambres"         : "nb_rooms",
     "nb_employes"      : "fte_total",
     "couts_op_ex"      : "opex_total",
     "revpar"           : "revpar",
@@ -1983,24 +1983,17 @@ for old, new in _COL_ALIAS.items():
         _df_mm[new] = _df_mm[old]
 
 # ── Colonnes calculées automatiquement ──────────────────────────────────────
-# Chaque colonne créée ici est soit une reformulation arithmétique (RevPAR ×
-# lits × 365...), soit un alias qui substitue une métrique DIFFÉRENTE plutôt
-# que de la renommer à l'identique — dans les deux cas ce n'est pas une donnée
+# Chaque colonne créée ici est une reformulation arithmétique (RevPAR ×
+# chambres × 365...) d'une colonne déjà utilisée ailleurs — pas une donnée
 # nouvelle. Trackée dans _proxy_cols pour ne PAS pouvoir satisfaire, seule, un
 # champ "required" (cf. check_module_feasibility) : un module ne doit pas se
-# déclarer calculable sur une reformulation ou une substitution, mais
-# uniquement sur une vraie donnée.
+# déclarer calculable sur une reformulation, mais uniquement sur une vraie
+# donnée.
 #
-# nb_lits → nb_rooms est dans ce cas : ce n'est PAS un renommage 1:1 (à
-# l'inverse de nb_employes→fte_total ou taux_occupation→occupancy_rate, qui
-# sont la même donnée sous un autre nom) — un lit n'est pas une chambre.
-# Aucune colonne de l'écran d'upload DEA-H ne contient de vrai nombre de
-# chambres ; tant qu'un utilisateur n'en fournit pas une explicitement,
-# "nb_rooms" reste une substitution, pas une donnée.
+# nb_chambres → nb_rooms N'EST PAS trackée ici : depuis le renommage de la
+# colonne source (ex-nb_lits), c'est un renommage 1:1 légitime — nb_chambres
+# EST le nombre de chambres saisi par l'utilisateur, donc nb_rooms l'est aussi.
 _proxy_cols = set()
-if "nb_rooms" in _df_mm.columns and "nb_lits" in _df_mm.columns:
-    if (_df_mm["nb_rooms"] == _df_mm["nb_lits"]).all():
-        _proxy_cols.add("nb_rooms")
 
 # ADR = RevPAR / (TO/100)  — toujours calculable depuis le dataset DEA-H base
 if "revpar" in _df_mm.columns and "occupancy_rate" in _df_mm.columns:
@@ -2077,7 +2070,7 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         dea.n               = len(dea.hotels)
         dea.orientation     = orientation
         dea.mode            = dea_mode if 'dea_mode' in dir() else 'standard'
-        dea.input_cols      = ['nb_employes','couts_op_ex'] if dea_mode in ('compact','minimal') else ['nb_lits','nb_employes','couts_op_ex']
+        dea.input_cols      = ['nb_employes','couts_op_ex'] if dea_mode in ('compact','minimal') else ['nb_chambres','nb_employes','couts_op_ex']
         dea.output_cols     = (['revpar'] if dea_mode == 'minimal' else ['revpar','satisfaction'])
         if dea_mode == 'standard': dea.output_cols = ['revpar','satisfaction','taux_occupation']
         _n_vars = len(dea.input_cols) + len(dea.output_cols)
@@ -2090,8 +2083,8 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         dea.has_goppam   = 'surface_m2'       in df.columns and 'gop' in df.columns
         dea.has_stars    = 'classement_etoiles' in df.columns
         dea.has_flow     = 'gop_n1'           in df.columns and 'revenu_n1' in df.columns
-        dea.inputs  = df[dea.input_cols].values.astype(float)
-        dea.outputs = df[dea.output_cols].values.astype(float)
+        dea.inputs  = dea.df[dea.input_cols].values.astype(float)
+        dea.outputs = dea.df[dea.output_cols].values.astype(float)
         dea.bcc_scores      = {}; dea.ccr_scores      = {}; dea.scale_efficiency = {}
         dea.slacks          = {}; dea.peers            = {}; dea.targets          = {}
         dea.topsis_scores   = {}; dea.topsis_ranks     = {}
@@ -2210,7 +2203,7 @@ with tab_board:
     # ── Upside financier total ───────────────────────────────────────────────
     _up_fte = _up_rev = _up_gop = _ca_tot = 0.0
     for _h in dea.hotels:
-        _lits  = float(dea.df.loc[_h, 'nb_lits'])
+        _lits  = float(dea.df.loc[_h, 'nb_chambres'])
         _rvp   = float(dea.df.loc[_h, 'revpar'])
         _se    = dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', 0)
         _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
@@ -2338,13 +2331,13 @@ with tab_board:
     st.markdown("---")
     st.markdown('<p class="section-title">🎯 Classement Composite — Score Pi (Multi-critères)</p>', unsafe_allow_html=True)
     st.caption(
-        "TOPSIS composite : BCC · RevPAR · Satisfaction · TO · ETP/lit · Coût/lit. "
+        "TOPSIS composite : BCC · RevPAR · Satisfaction · TO · ETP/chambre · Coût/chambre. "
         "Pondération Shannon entropy (α=0.6). Voir Tab 10 pour le détail complet."
     )
     try:
         _bcc_s  = pd.Series(dea.bcc_scores)
-        _etp_r  = dea.df['nb_employes'] / dea.df['nb_lits']
-        _cpor   = dea.df['couts_op_ex'] / dea.df['nb_lits']
+        _etp_r  = dea.df['nb_employes'] / dea.df['nb_chambres']
+        _cpor   = dea.df['couts_op_ex'] / dea.df['nb_chambres']
         _dm_b   = pd.DataFrame({
             'DEA BCC'   : _bcc_s,
             'RevPAR'    : dea.df['revpar'],
@@ -2424,9 +2417,9 @@ with tab_board:
 
 # ── Recommandations SBM par variable ─────────────────────────────────────────
 _SBM_RECO = {
-    'nb_employes'       : "Optimiser ratio ETP/lit — masse salariale au-dessus de la norme compset. Piste : réorganisation, polyvalence, externalisation.",
+    'nb_employes'       : "Optimiser ratio ETP/chambre — masse salariale au-dessus de la norme compset. Piste : réorganisation, polyvalence, externalisation.",
     'couts_op_ex'       : "Coûts opérationnels excessifs — RevPAR/OpEx sous la norme. Réviser contrats fournisseurs, énergie, maintenance.",
-    'nb_lits'           : "Capacité installée sous-productive — TO insuffisant vs taille. Repositionnement ou reconfiguration de la capacité à évaluer.",
+    'nb_chambres'           : "Capacité installée sous-productive — TO insuffisant vs taille. Repositionnement ou reconfiguration de la capacité à évaluer.",
     'revpar'            : "Levier RevPAR identifié — yield management non optimisé. Comparer ADR et TO aux benchmarks du compset.",
     'taux_occupation'   : "Taux d'occupation sous-optimal — renforcer distribution et action commerciale. Revoir mix canal et contrats corporate.",
     'satisfaction_score': "Satisfaction sous le potentiel — impact pricing power et fidélisation. Plan d'action qualité de service prioritaire.",
@@ -2823,7 +2816,7 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
 
     _compset_init = pd.DataFrame({
         'Hôtel'           : dea.hotels,
-        'Capacité (lits)' : [int(dea.df.loc[h, 'nb_lits']) for h in dea.hotels],
+        'Capacité (chambres)' : [int(dea.df.loc[h, 'nb_chambres']) for h in dea.hotels],
         'Annee ouv.'      : [0]*dea.n,
         'Dern. renov.'    : [0]*dea.n,
         'Classement (e)'  : [3]*dea.n,
@@ -2838,8 +2831,8 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
     _cs = st.data_editor(
         st.session_state['compset_profile'], use_container_width=True,
         column_config={
-            'Capacité (lits)': st.column_config.NumberColumn('Lits', min_value=0, format='%d',
-                                help="Capacité en lits (nb_lits) — pas un nombre de chambres."),
+            'Capacité (chambres)': st.column_config.NumberColumn('Chambres', min_value=0, format='%d',
+                                help="Capacité en lits (nb_chambres) — pas un nombre de chambres."),
             'Annee ouv.'    : st.column_config.NumberColumn('Annee ouv.', min_value=1800, max_value=2030, format='%d'),
             'Dern. renov.'  : st.column_config.NumberColumn('Dern. renov.', min_value=1800, max_value=2030, format='%d'),
             'Classement (e)': st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
@@ -2850,7 +2843,7 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         }, key='compset_editor',
     )
     st.session_state['compset_profile'] = _cs
-    _ch_vals = _cs['Capacité (lits)'].values
+    _ch_vals = _cs['Capacité (chambres)'].values
     if _ch_vals.max() > 0 and _ch_vals.min() > 0:
         _ratio = _ch_vals.max() / _ch_vals.min()
         if _ratio > 3: st.warning(f'Ratio taille max/min = {_ratio:.1f}x - compset heterogene. Segmenter ou affiner.')
@@ -2860,8 +2853,8 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
     kpis_def = {
         'RevPAR (€)': (dea.df['revpar'], 'benefit'), 'Satisfaction': (dea.df['satisfaction'], 'benefit'),
         'TO (%)': (dea.df['taux_occupation'], 'benefit'),
-        'ETP / lit': (dea.df['nb_employes'] / dea.df['nb_lits'], 'cost'),
-        'CPOR (k€/ch)': (dea.df['couts_op_ex'] / dea.df['nb_lits'], 'cost'),
+        'ETP / chambre': (dea.df['nb_employes'] / dea.df['nb_chambres'], 'cost'),
+        'CPOR (k€/ch)': (dea.df['couts_op_ex'] / dea.df['nb_chambres'], 'cost'),
         'Score BCC': (pd.Series(dea.bcc_scores), 'benefit'),
     }
     q_stats = []
@@ -2915,8 +2908,8 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
                        for h in dea.hotels])
     else:
         # Recalcul si Tab 1 non encore visité
-        bcc_s = pd.Series(dea.bcc_scores); etp_r = dea.df['nb_employes'] / dea.df['nb_lits']
-        cpor  = dea.df['couts_op_ex'] / dea.df['nb_lits']
+        bcc_s = pd.Series(dea.bcc_scores); etp_r = dea.df['nb_employes'] / dea.df['nb_chambres']
+        cpor  = dea.df['couts_op_ex'] / dea.df['nb_chambres']
         dm = pd.DataFrame({
             'DEA BCC': bcc_s, 'RevPAR': dea.df['revpar'], 'Satisfaction': dea.df['satisfaction'],
             'TO%': dea.df['taux_occupation'],
@@ -2925,7 +2918,7 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         cap_inp_tab10 = st.session_state.get('capital_input', None)
         if cap_inp_tab10 is not None and 'gop (k€)' in cap_inp_tab10.columns:
             # RevPAR intègre déjà l'occupation — pas de double comptage
-            rev_est = dea.df['revpar'] * 365 * dea.df['nb_lits']
+            rev_est = dea.df['revpar'] * 365 * dea.df['nb_chambres']
             gop_vals = cap_inp_tab10['gop (k€)'].astype(float) * 1000
             dm['GOP Margin'] = (gop_vals / rev_est.replace(0, np.nan)).fillna(0)
         crit_labels = list(dm.columns); X = dm.values.astype(float); n_dmu, n_crit = X.shape
@@ -3069,7 +3062,7 @@ Réf. : Assaf, Barros & Josiassen (2010) — metafrontière GTE/MTE/TGR.
 # ══════════════════════════════════════════════
 with tab_slacks:
     st.markdown('<p class="section-title">🔥 Slacks — Gaspillages et Potentiels d\'Amélioration</p>', unsafe_allow_html=True)
-    input_names  = ['nb_lits', 'nb_employes', 'couts_op_ex']
+    input_names  = ['nb_chambres', 'nb_employes', 'couts_op_ex']
     output_names = ['revpar', 'satisfaction', 'taux_occupation']
     hotels_inefficient = [h for h in dea.hotels if dea.bcc_scores[h] < 0.999]
 
@@ -3088,7 +3081,7 @@ with tab_slacks:
                     row.append(round(s / cur * 100, 1) if cur > 0 else 0)
                 slack_matrix_in.append(row)
             fig_heat_in = go.Figure(go.Heatmap(
-                z=slack_matrix_in, x=['Lits', 'Employés', 'Coûts Op.'], y=hotels_inefficient,
+                z=slack_matrix_in, x=['Chambres', 'Employés', 'Coûts Op.'], y=hotels_inefficient,
                 colorscale='Reds',
                 text=[[f"{v:.1f}%" for v in row] for row in slack_matrix_in],
                 texttemplate="%{text}", colorbar=dict(title="%"),
@@ -3123,7 +3116,7 @@ with tab_slacks:
         for h in hotels_inefficient:
             slack_emp    = dea.slacks[h]['inputs'].get('nb_employes', 0)
             slack_revpar = dea.slacks[h]['outputs'].get('revpar', 0)
-            lits         = float(dea.df.loc[h, 'nb_lits'])
+            lits         = float(dea.df.loc[h, 'nb_chambres'])
             upside_fte   = round(slack_emp * avg_salary / 1000)
             upside_rev   = round(slack_revpar * lits * jours_exploit * revpar_value / 1_000_000, 1)
             upside_data.append({
@@ -3141,7 +3134,7 @@ with tab_slacks:
 
         par_por_rows = []
         for h in hotels_inefficient:
-            lits_h   = float(dea.df.loc[h, 'nb_lits'])
+            lits_h   = float(dea.df.loc[h, 'nb_chambres'])
             revpar_h = float(dea.df.loc[h, 'revpar'])
             occ_h    = float(dea.df.loc[h, 'taux_occupation']) / 100
             nights_h = lits_h * jours_exploit * occ_h
@@ -3196,8 +3189,8 @@ with tab_fiche:
         st.markdown("**📊 Données brutes**")
         raw = dea.df.loc[selected]
         raw_df = pd.DataFrame({
-            'Indicateur': ['Nombre de lits', 'Employés', 'Coûts Op. (M€)', 'RevPAR (€)', 'Satisfaction', 'Taux Occup. (%)'],
-            'Valeur': [raw['nb_lits'], raw['nb_employes'], raw['couts_op_ex'],
+            'Indicateur': ['Nombre de chambres', 'Employés', 'Coûts Op. (M€)', 'RevPAR (€)', 'Satisfaction', 'Taux Occup. (%)'],
+            'Valeur': [raw['nb_chambres'], raw['nb_employes'], raw['couts_op_ex'],
                        raw['revpar'], raw['satisfaction'], raw['taux_occupation']],
         })
         st.dataframe(raw_df, use_container_width=True, hide_index=True)
@@ -3360,7 +3353,7 @@ with tab_fiche:
     st.markdown("---")
     st.markdown('<p class="section-title">🔒 Plan B — Variables structurellement fixes</p>', unsafe_allow_html=True)
     st.caption(
-        "Certains inputs ne peuvent pas être réduits à court terme (nb_lits, surface, CAPEX). "
+        "Certains inputs ne peuvent pas être réduits à court terme (nb_chambres, surface, CAPEX). "
         "Verrouillez-les : le modèle recalcule les cibles de rattrapage sur les variables "
         "discrétionnaires restantes. Réf. : Banker & Morey (1986) Management Science."
     )
@@ -3368,9 +3361,9 @@ with tab_fiche:
     _nd_fixed = st.multiselect(
         "Variables à verrouiller (non-modifiables)",
         options=dea.input_cols,
-        default=[c for c in ['nb_lits'] if c in dea.input_cols],
+        default=[c for c in ['nb_chambres'] if c in dea.input_cols],
         key="nd_fixed_cols",
-        help="Ex : nb_lits (capacité physique), surface_m2 (m² du bâtiment)"
+        help="Ex : nb_chambres (capacité physique), surface_m2 (m² du bâtiment)"
     )
 
     if st.button("🔄 Calculer Plan B", key="nd_btn"):
@@ -3444,10 +3437,10 @@ with tab_fiche:
                 st.dataframe(pd.DataFrame(_out_rows), use_container_width=True, hide_index=True)
 
             st.info(
-                f"**Lecture :** nb_lits verrouillé à {dea.df.loc[selected, 'nb_lits']:.0f} lits. "
+                f"**Lecture :** nb_chambres verrouillé à {dea.df.loc[selected, 'nb_chambres']:.0f} lits. "
                 "Pour atteindre la frontière, l'hôtel doit compenser sur les variables discrétionnaires "
                 "ci-dessus. Chaque ligne indique l'effort requis variable par variable."
-                if 'nb_lits' in _nd_fixed and 'nb_lits' in dea.df.columns else
+                if 'nb_chambres' in _nd_fixed and 'nb_chambres' in dea.df.columns else
                 "Compenser sur les variables discrétionnaires ci-dessus pour atteindre la frontière "
                 "sans modifier les inputs verrouillés."
             )
@@ -3491,7 +3484,7 @@ with tab_fiche:
     )
 
     _wi_raw  = dea.df.loc[selected]
-    _wi_lits = float(_wi_raw['nb_lits'])
+    _wi_lits = float(_wi_raw['nb_chambres'])
     _wi_emp  = float(_wi_raw['nb_employes'])
     _wi_opex = float(_wi_raw['couts_op_ex'])
     _wi_rvp  = float(_wi_raw['revpar'])
@@ -3503,7 +3496,7 @@ with tab_fiche:
     with _wi_col1:
         st.markdown("**📥 Inputs (ressources)**")
         _wi_new_lits = st.slider(
-            "Nombre de lits", 
+            "Nombre de chambres", 
             min_value=max(10,  int(_wi_lits * 0.5)),
             max_value=int(_wi_lits * 1.5),
             value=int(_wi_lits),
@@ -3613,14 +3606,14 @@ with tab_fiche:
                 # Modifier le DataFrame uniquement pour l'hôtel sélectionné
                 import pulp as _pulp
                 _df_mod = dea.df.copy()
-                _df_mod.loc[selected, 'nb_lits']       = _wi_new_lits
+                _df_mod.loc[selected, 'nb_chambres']       = _wi_new_lits
                 _df_mod.loc[selected, 'nb_employes']   = _wi_new_emp
                 _df_mod.loc[selected, 'couts_op_ex']   = _wi_new_opex
                 _df_mod.loc[selected, 'revpar']        = _wi_new_rvp
                 _df_mod.loc[selected, 'satisfaction']  = _wi_new_sat
                 _df_mod.loc[selected, 'taux_occupation'] = _wi_new_occ
 
-                _wi_inputs_mat  = _df_mod[['nb_lits','nb_employes','couts_op_ex']].values.astype(float)
+                _wi_inputs_mat  = _df_mod[['nb_chambres','nb_employes','couts_op_ex']].values.astype(float)
                 _wi_outputs_mat = _df_mod[['revpar','satisfaction','taux_occupation']].values.astype(float)
                 _wi_hotels      = _df_mod.index.tolist()
                 _wi_n           = len(_wi_hotels)
@@ -3796,7 +3789,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
         "inter-groupes (Assaf et al. 2010). Si votre compset est homogène, tous les hôtels "
         "appartiennent au même groupe — GTE = MTE pour tous, sans impact sur les scores."
     )
-    seg_options = {'🏠 Taille (auto depuis nb_lits)': 'taille'}
+    seg_options = {'🏠 Taille (auto depuis nb_chambres)': 'taille'}
     if 'type_gestion' in dea.df.columns:
         seg_options['⚙️ Type de gestion (indépendant/chaîne)'] = 'type_gestion'
     if 'classement_etoiles' in dea.df.columns:
@@ -4156,7 +4149,7 @@ with tab_capital:
             row      = cap_input.loc[hotel]
             surf     = float(row['surface_m2']); capex_ke = float(row['capex_annuel (k€)'])
             gop_ke   = float(row['gop (k€)']);   stars    = int(row['classement (★)'])
-            lits     = float(dea.df.loc[hotel, 'nb_lits']); revpar = float(dea.df.loc[hotel, 'revpar'])
+            lits     = float(dea.df.loc[hotel, 'nb_chambres']); revpar = float(dea.df.loc[hotel, 'revpar'])
             to       = float(dea.df.loc[hotel, 'taux_occupation']) / 100
             goppam   = round(gop_ke * 1000 / surf, 2)    if surf > 0    else None
             capex_ch = round(capex_ke * 1000 / lits, 0)  if lits > 0    else None
@@ -4173,8 +4166,8 @@ with tab_capital:
             cap_rows.append({
                 'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel, 0):.1%}", 'Classement': '★' * stars,
                 'Surface (m²)': int(surf) if surf > 0 else '—',
-                'm²/lit': round(surf/lits,1) if surf>0 and lits>0 else '—',
-                'CAPEX/lit (k€)': round(capex_ch/1000,1) if capex_ch else '—',
+                'm²/chambre': round(surf/lits,1) if surf>0 and lits>0 else '—',
+                'CAPEX/chambre (k€)': round(capex_ch/1000,1) if capex_ch else '—',
                 'Rendement CAPEX (x)': rendement if rendement else '—',
                 'GOP (k€)': gop_ke if gop_ke > 0 else '—',
                 'Marge GOP %': f"{gop_margin:.1f}%" if gop_margin else '—',
@@ -4186,13 +4179,13 @@ with tab_capital:
     
         c1, c2, c3, c4 = st.columns(4)
         goppam_vals = [r['GOPPAM (€/m²)'] for r in cap_rows if r['GOPPAM (€/m²)'] != '—']
-        capex_vals  = [r['CAPEX/lit (k€)'] for r in cap_rows if r['CAPEX/lit (k€)'] != '—']
+        capex_vals  = [r['CAPEX/chambre (k€)'] for r in cap_rows if r['CAPEX/chambre (k€)'] != '—']
         margin_vals = [float(r['Marge GOP %'].replace('%','')) for r in cap_rows if r['Marge GOP %'] != '—']
         upside_vals = [r['Upside GOP /FT (M€/an)'] for r in cap_rows if r['Upside GOP /FT (M€/an)'] != '—']
         with c1:
             if goppam_vals: st.metric("GOPPAM moyen", f"{sum(goppam_vals)/len(goppam_vals):.2f} €/m²")
         with c2:
-            if capex_vals:  st.metric("CAPEX/lit moyen", f"{sum(capex_vals)/len(capex_vals):.1f} k€")
+            if capex_vals:  st.metric("CAPEX/chambre moyen", f"{sum(capex_vals)/len(capex_vals):.1f} k€")
         with c3:
             if margin_vals: st.metric("Marge GOP moyenne", f"{sum(margin_vals)/len(margin_vals):.1f}%")
         with c4:
@@ -4205,10 +4198,10 @@ with tab_capital:
             _cat_colors = {'3★': '#3498db', '4★': '#2ecc71', '4★ Sup': '#f39c12', '5★': '#9b59b6'}
             plot_data = []
             for r in cap_rows:
-                if r['GOPPAM (€/m²)'] != '—' and r['CAPEX/lit (k€)'] != '—':
+                if r['GOPPAM (€/m²)'] != '—' and r['CAPEX/chambre (k€)'] != '—':
                     h = r['Hôtel']
                     _cat = dea.df.loc[h, 'categorie'] if 'categorie' in dea.df.columns else '4★'
-                    plot_data.append((h, r['GOPPAM (€/m²)'], r['CAPEX/lit (k€)'],
+                    plot_data.append((h, r['GOPPAM (€/m²)'], r['CAPEX/chambre (k€)'],
                                       dea.bcc_scores.get(h, 0), _cat))
             if plot_data:
                 fig_cap = go.Figure()
@@ -4224,7 +4217,7 @@ with tab_capital:
                                     line=dict(width=1.5, color='white')),
                         name=cat, legendgroup=cat, showlegend=_show_leg,
                         hovertemplate=f"<b>{h}</b><br>Catégorie: {cat}<br>"
-                                      f"CAPEX/lit: %{{x:.1f}} k€<br>GOPPAM: %{{y:.2f}} €/m²<br>"
+                                      f"CAPEX/chambre: %{{x:.1f}} k€<br>GOPPAM: %{{y:.2f}} €/m²<br>"
                                       f"BCC: {bcc:.1%}<extra></extra>",
                     ))
                 # Annotations texte uniquement pour les outliers (top/bottom GOPPAM)
@@ -4242,7 +4235,7 @@ with tab_capital:
                             bgcolor='rgba(255,255,255,0.7)', borderpad=2,
                         )
                 fig_cap.update_layout(
-                    xaxis=dict(title="CAPEX annuel / lit (k€) — benchmark par catégorie"),
+                    xaxis=dict(title="CAPEX annuel / chambre (k€) — benchmark par catégorie"),
                     yaxis=dict(title="GOPPAM (€/m²)"),
                     legend=dict(title="Catégorie", orientation="h", yanchor="bottom", y=1.02),
                     height=420, paper_bgcolor='rgba(0,0,0,0)',
@@ -4275,7 +4268,7 @@ with tab_capital:
             hotel  = r['Hôtel']
             ft     = ft_pct
             slk_r  = dea.slacks.get(hotel,{}).get('outputs',{}).get('revpar', 0)
-            lits   = float(dea.df.loc[hotel, 'nb_lits'])
+            lits   = float(dea.df.loc[hotel, 'nb_chambres'])
             up_rev = round(slk_r * lits * 365 / 1_000_000, 3)
             up_gop = round(up_rev * ft, 3)
             upside_rows.append({
@@ -4523,7 +4516,7 @@ with tab_capital:
             hotel_ft = r['Hôtel']
             stars_ft = int(cap_input.loc[hotel_ft, 'classement (★)']) if 'classement (★)' in cap_input.columns and hotel_ft in cap_input.index else 3
             ft_bench_ft = ft_pct
-            lits_ft  = float(dea.df.loc[hotel_ft, 'nb_lits'])
+            lits_ft  = float(dea.df.loc[hotel_ft, 'nb_chambres'])
             revpar_ft = float(dea.df.loc[hotel_ft, 'revpar'])
             # CA = RevPAR × lits × jours (RevPAR intègre déjà l'occupation)
             ca_ft    = revpar_ft * lits_ft * jours_exploit
@@ -4592,13 +4585,13 @@ with tab_malm:
     # Vérifier colonnes N-1
     _n1_present = has_n1_cols(dea.df)
     _n1_required = ["revpar_n1", "nb_employes_n1", "couts_op_ex_n1",
-                    "taux_occupation_n1", "nb_lits_n1"]
+                    "taux_occupation_n1", "nb_chambres_n1"]
     _n1_missing  = [c for c in _n1_required if c not in dea.df.columns]
 
     if _n1_missing:
         _warn_msg = (
             f"Colonnes N-1 manquantes : {', '.join(_n1_missing)}. "
-            "Ajoutez nb_lits_n1, nb_employes_n1, couts_op_ex_n1, "
+            "Ajoutez nb_chambres_n1, nb_employes_n1, couts_op_ex_n1, "
             "revpar_n1, taux_occupation_n1 (+ satisfaction_n1 optionnel) "
             "a votre CSV pour activer le Malmquist."
         )
@@ -4809,13 +4802,13 @@ with tab_malm:
     _tobit_candidates = {
         # Structurelles
         'classement_etoiles': 'Classement (★)',
-        'nb_lits'           : 'Nombre de lits',
-        'log_nb_lits'       : 'Taille — log(nb lits)',
+        'nb_chambres'           : 'Nombre de chambres',
+        'log_nb_chambres'       : 'Taille — log(nb lits)',
         'surface_m2'        : 'Surface totale (m²)',
         # Financières — Pulina & Santoni (2018)
         'ltv_proxy'         : 'Intensité capital / CA (proxy LTV %)',
         'asset_yield'       : 'Rendement actifs CA/BV (proxy ROA)',
-        'capex_per_room'    : 'CAPEX par lit (k€)',
+        'capex_per_room'    : 'CAPEX par chambre (k€)',
         'gop_margin_pct'    : 'Marge GOP (%)',
         'capex_annuel'      : 'CAPEX annuel total (k€)',
         # Saisonnalité
@@ -5075,7 +5068,7 @@ Aucun résultat disponible pour l'instant.
 | `energy_kwh` | Consommation énergie |
 | `water_m3` | Consommation eau |
 
-*Note : les colonnes DEA-H standard (`nb_lits`, `nb_employes`, `couts_op_ex`, `revpar`, `taux_occupation`, `satisfaction`)
+*Note : les colonnes DEA-H standard (`nb_chambres`, `nb_employes`, `couts_op_ex`, `revpar`, `taux_occupation`, `satisfaction`)
 sont automatiquement mappées vers les noms standard des modules.*
 """)
     else:
@@ -5180,7 +5173,7 @@ sont automatiquement mappées vers les noms standard des modules.*
                 _MANQUE += [("revpar_n1", "RevPAR de l'exercice précédent (€)",       "11"),
                             ("gop_n1",    "GOP de l'exercice précédent (k€)",         "11")]
             if not _has_n1:
-                _MANQUE += [("nb_lits_n1/ nb_employes_n1 / couts_op_ex_n1 / taux_occupation_n1",
+                _MANQUE += [("nb_chambres_n1/ nb_employes_n1 / couts_op_ex_n1 / taux_occupation_n1",
                              "Jeu complet de l'exercice précédent", "12")]
             if not _has_sw:
                 _MANQUE += [("classement_etoiles, saison_dummy, energy_kwh…",
@@ -5278,7 +5271,7 @@ with tab_budget:
     st.caption('Russo & Legel Exhibit 6 : N-1 / Budget / Realise en PAR (Per Available Room), POR (Per Occupied Room), % CA')
 
     sel_var = st.selectbox('Actif a analyser', options=dea.hotels, key='var_hotel_sel')
-    lits_v  = float(dea.df.loc[sel_var, 'nb_lits'])
+    lits_v  = float(dea.df.loc[sel_var, 'nb_chambres'])
     occ_v   = float(dea.df.loc[sel_var, 'taux_occupation']) / 100
     revpar_v= float(dea.df.loc[sel_var, 'revpar'])
     nights_v= lits_v * 365 * occ_v
