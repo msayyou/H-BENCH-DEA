@@ -565,6 +565,17 @@ def check_module_feasibility(module_id: str, available_cols: list[str],
         c for c in get_required_inputs(module_id) + get_required_outputs(module_id)
         if c not in real_cols
     ]
+    # Un modèle DEA n'a de sens qu'avec au moins un vrai input ET un vrai
+    # output — même si aucun des deux n'est marqué "required" (cas de modules
+    # dont tous les inputs sont optionnels, ex. Capital & Actifs). Sans ce
+    # plancher, "missing_required" pourrait être vide alors qu'il n'y a
+    # littéralement aucune donnée réelle à mettre dans le modèle.
+    _has_real_input  = any(c in real_cols for c in m["inputs"])
+    _has_real_output = any(c in real_cols for c in m["outputs"])
+    if not _has_real_input and not get_required_inputs(module_id):
+        missing_req = missing_req + ["(aucun input réel disponible)"]
+    if not _has_real_output and not get_required_outputs(module_id):
+        missing_req = missing_req + ["(aucun output réel disponible)"]
     coverage = len(available) / len(all_expected) if all_expected else 0.0
     return {
         "feasible": (len(missing_req) == 0),
