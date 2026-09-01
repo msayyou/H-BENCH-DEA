@@ -580,6 +580,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         "la <b>robustesse</b> de son avantage, non de sa performance courante.", meth_s))
     try:
         se_df = dea.compute_super_efficiency()
+        _n_se_total = len(se_df)
         sd = [["Hôtel", "BCC", "Super-eff.", "Lecture"]]
         for _, r in se_df.head(min(12, len(se_df))).iterrows():
             _se  = r['Super-Efficience']
@@ -593,6 +594,11 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             sd.append([_clean(r['Hôtel'], 42), _clean(r['BCC']),
                        f"{_se:.3f}" if isinstance(_se, (int, float)) else _clean(_se),
                        _lec])
+        if _n_se_total > 12:
+            story.append(Paragraph(
+                f"Tableau limité aux 12 premiers actifs (sur {_n_se_total} au total, triés par "
+                f"super-efficience) — les lectures ci-dessous portent sur l'ensemble du portefeuille, "
+                f"pas uniquement sur les lignes affichées.", small_s))
         story.append(_tbl(sd, [6.6*cm, 1.9*cm, 2.2*cm, 6.7*cm],
                           align_right=[1, 2]))
 
@@ -3876,6 +3882,11 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     with col2:
         st.info("**🧠 GTE faible + TGR élevé** — Potentiel là, gestion insuffisante → plan opérationnel.")
         st.error("**🔴 GTE faible + TGR faible** — Double gap. Cession ou restructuration.")
+    st.caption(
+        "« Élevé » = quartile supérieur de GTE/TGR **dans ce portefeuille** (plancher 75% en "
+        "absolu), pas un seuil fixe universel — sur un compset homogène, un seuil fixe "
+        "classerait presque tout le monde en \"Leader absolu\" sans que ce soit discriminant."
+    )
 
     st.info(
         "💡 **Peers restreints au segment pertinent via GTE** — la frontière intra-groupe "
