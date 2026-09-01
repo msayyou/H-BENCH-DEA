@@ -529,9 +529,20 @@ def get_required_outputs(module_id: str) -> list[str]:
     ]
 
 
-def check_module_feasibility(module_id: str, available_cols: list[str]) -> dict:
+def check_module_feasibility(module_id: str, available_cols: list[str],
+                              proxy_cols: "set[str] | None" = None) -> dict:
     """
     Vérifie si un module est activable avec les colonnes disponibles.
+
+    proxy_cols : colonnes calculées par reformulation arithmétique d'autres
+    colonnes déjà utilisées ailleurs (ex. rooms_revenue = RevPAR × chambres × 365,
+    adr = RevPAR / Occupation). Elles enrichissent l'affichage mais ne peuvent pas
+    à elles seules satisfaire une colonne "required" : sinon un module comme
+    Financier USALI ou Capital & Actifs se déclare calculable sur une simple
+    reformulation du RevPAR, sans jamais voir de vraie donnée départementale
+    (rooms_cost, fb_cost, total_revenue réel...). Un required satisfait
+    uniquement par une colonne proxy reste listé dans missing_required.
+
     Retourne :
         {
           "feasible": bool,
@@ -542,6 +553,8 @@ def check_module_feasibility(module_id: str, available_cols: list[str]) -> dict:
         }
     """
     m = MODULES[module_id]
+    proxy_cols = proxy_cols or set()
+    real_cols = [c for c in available_cols if c not in proxy_cols]
     all_expected = (
         list(m["inputs"].keys())
         + list(m["outputs"].keys())
@@ -550,7 +563,7 @@ def check_module_feasibility(module_id: str, available_cols: list[str]) -> dict:
     available = [c for c in all_expected if c in available_cols]
     missing_req = [
         c for c in get_required_inputs(module_id) + get_required_outputs(module_id)
-        if c not in available_cols
+        if c not in real_cols
     ]
     coverage = len(available) / len(all_expected) if all_expected else 0.0
     return {
