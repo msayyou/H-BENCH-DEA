@@ -31,7 +31,7 @@ MODULES: dict[str, dict] = {
         "model": "BCC",
         "inputs": {
             "nb_rooms": {
-                "label": "Nombre de chambres",
+                "label": "Nombre de chambres (lits DEA-H si non fournies)",
                 "unit": "unité",
                 "required": True,
             },
@@ -165,7 +165,7 @@ MODULES: dict[str, dict] = {
         "model": "CCR",
         "inputs": {
             "nb_rooms": {
-                "label": "Capacité (chambres)",
+                "label": "Capacité (chambres, ou lits DEA-H par défaut)",
                 "unit": "unité",
                 "required": False,
             },
@@ -288,7 +288,7 @@ MODULES: dict[str, dict] = {
                 "required": False,
             },
             "nb_rooms": {
-                "label": "Capacité (chambres) — proxy exposition marché",
+                "label": "Capacité (chambres, ou lits DEA-H par défaut) — proxy exposition marché",
                 "unit": "unité",
                 "required": False,
             },
