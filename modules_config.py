@@ -554,10 +554,7 @@ def check_module_feasibility(module_id: str, available_cols: list[str]) -> dict:
     ]
     coverage = len(available) / len(all_expected) if all_expected else 0.0
     return {
-        "feasible": (
-            len([c for c in m["inputs"]  if c in available_cols]) >= 1 and
-            len([c for c in m["outputs"] if c in available_cols]) >= 1
-        ),
+        "feasible": (len(missing_req) == 0),
         "missing_required": missing_req,
         "available_inputs": [c for c in m["inputs"] if c in available_cols],
         "available_outputs": [c for c in m["outputs"] if c in available_cols],
