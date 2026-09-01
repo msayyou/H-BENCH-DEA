@@ -609,13 +609,45 @@ class HotelDEAAnalyzer:
             grp = groups.get(h, '—'); gte = gte_scores.get(h, 1.0); mte = mte_scores.get(h, 1.0)
             tgr = round(min(mte / gte, 1.0), 4) if gte > 0 else 0.0
             rows.append({'Hôtel': h, 'Groupe': grp, 'GTE': round(gte, 4), 'MTE': round(mte, 4),
-                         'TGR': tgr,
-                         'Interprétation': ('✅ Leader absolu'               if gte >= 0.90 and tgr >= 0.90 else
-                                            '⚙️ Bon gestionnaire, segment faible' if gte >= 0.90 else
-                                            '🧠 Segment fort, gestion à améliorer' if tgr >= 0.90 else
-                                            '🔴 Double gap'),
-                         '_warn': group_warns.get(grp)})
-        df_out = pd.DataFrame(rows); df_out['_warn'] = df_out['_warn'].fillna('')
+                         'TGR': tgr, '_warn': group_warns.get(grp)})
+        df_out = pd.DataFrame(rows)
+
+        # Seuils RELATIFS au portefeuille (quartile supérieur de GTE/TGR), pas un
+        # seuil absolu fixe. Sur un portefeuille homogène (même enseigne, même
+        # classement), presque tous les hôtels franchissent trivialement un seuil
+        # fixe de 90% — pas parce qu'ils sont réellement leaders les uns par
+        # rapport aux autres, mais parce que le portefeuille entier est resserré
+        # près de sa propre frontière. Plancher à 0.75 : ne jamais qualifier un
+        # score de "élevé" en dessous de 75% en absolu, même si le quartile du
+        # portefeuille est plus bas (portefeuille en difficulté généralisée).
+        gte_thresh = max(df_out['GTE'].quantile(0.75), 0.75)
+        tgr_thresh = max(df_out['TGR'].quantile(0.75), 0.75)
+        df_out['Interprétation'] = df_out.apply(
+            lambda r: ('✅ Leader absolu'                 if r['GTE'] >= gte_thresh and r['TGR'] >= tgr_thresh else
+                       '⚙️ Bon gestionnaire, segment faible' if r['GTE'] >= gte_thresh else
+                       '🧠 Segment fort, gestion à améliorer' if r['TGR'] >= tgr_thresh else
+                       '🔴 Double gap'), axis=1)
+
+        # Garde-fou de concentration : si une même étiquette couvre une trop
+        # grande part du portefeuille, l'étiquette ne discrimine plus rien —
+        # même avec un seuil relatif, un portefeuille très homogène peut encore
+        # concentrer tout le monde dans une case. On le signale explicitement
+        # plutôt que de laisser croire à une vraie hiérarchie.
+        if len(df_out) >= 5:
+            counts = df_out['Interprétation'].value_counts(normalize=True)
+            top_cat, top_share = counts.idxmax(), counts.max()
+            if top_share > 0.70:
+                concentration_msg = (
+                    f"{top_share:.0%} du portefeuille classé « {top_cat} » — portefeuille "
+                    f"probablement trop homogène pour que cette étiquette discrimine ; "
+                    f"lire les valeurs GTE/TGR brutes plutôt que la catégorie."
+                )
+                df_out.loc[df_out.index[0], '_warn'] = (
+                    (df_out.loc[df_out.index[0], '_warn'] + ' ' if df_out.loc[df_out.index[0], '_warn'] else '')
+                    + concentration_msg
+                )
+
+        df_out['_warn'] = df_out['_warn'].fillna('')
         return df_out
 
 
