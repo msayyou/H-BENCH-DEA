@@ -34,7 +34,7 @@ warnings.filterwarnings('ignore')
 #  CONSTANTES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-INPUT_COLS  = ['nb_lits', 'nb_employes', 'couts_op_ex']
+INPUT_COLS  = ['nb_chambres', 'nb_employes', 'couts_op_ex']
 OUTPUT_COLS = ['revpar', 'satisfaction', 'taux_occupation']
 
 # ── Modes Micro-compset (Raab & Lichty 2002) ─────────────────────────────────
@@ -44,7 +44,7 @@ OUTPUT_COLS = ['revpar', 'satisfaction', 'taux_occupation']
 # Mode minimal   : 2 inputs + 1 output  → min  9 hôtels
 INPUT_MODES = {
     'standard' : {
-        'inputs'  : ['nb_lits', 'nb_employes', 'couts_op_ex'],
+        'inputs'  : ['nb_chambres', 'nb_employes', 'couts_op_ex'],
         'outputs' : ['revpar', 'satisfaction', 'taux_occupation'],
         'label'   : 'Standard (3+3) — min 18 hôtels',
         'min_dmu' : 18,
@@ -247,7 +247,7 @@ class HotelDEAAnalyzer:
 
         for hotel in self.hotels:
             h    = self.df.loc[hotel]
-            lits = float(h['nb_lits'])
+            lits = float(h['nb_chambres'])
 
             self.trevpar[hotel] = (
                 round(float(h['total_revenue']) / (lits * 365), 2)
@@ -260,7 +260,7 @@ class HotelDEAAnalyzer:
 
             cap = {
                 'surface_m2'     : float(h['surface_m2']) if self.has_surface else None,
-                'm2_par_lit'     : (round(float(h['surface_m2']) / lits, 1)
+                'm2_par_chambre'     : (round(float(h['surface_m2']) / lits, 1)
                                     if self.has_surface and lits > 0 else None),
                 'goppam'         : self.goppam[hotel],
             }
@@ -270,10 +270,10 @@ class HotelDEAAnalyzer:
                 total_rev = (float(h['total_revenue']) if self.has_trevpar
                              else float(h['revpar']) * float(h['taux_occupation']) / 100 * 365 * lits)
                 cap['capex_annuel']      = capex
-                cap['capex_par_lit']     = round(capex / lits, 0) if lits > 0 else None
+                cap['capex_par_chambre']     = round(capex / lits, 0) if lits > 0 else None
                 cap['rendement_capex']   = round(total_rev / capex, 2) if capex > 0 else None
             else:
-                cap['capex_annuel'] = cap['capex_par_lit'] = cap['rendement_capex'] = None
+                cap['capex_annuel'] = cap['capex_par_chambre'] = cap['rendement_capex'] = None
 
             if self.has_flow:
                 delta_gop = float(h['gop']) - float(h['gop_n1'])
@@ -513,12 +513,12 @@ class HotelDEAAnalyzer:
         total_nights = sum(
             float(self.df.loc[h, 'revpar'])
             * float(self.df.loc[h, 'taux_occupation']) / 100
-            * float(self.df.loc[h, 'nb_lits']) * 365
+            * float(self.df.loc[h, 'nb_chambres']) * 365
             for h in self.hotels
         )
 
         for hotel in self.hotels:
-            lits  = float(self.df.loc[hotel, 'nb_lits'])
+            lits  = float(self.df.loc[hotel, 'nb_chambres'])
             occ   = float(self.df.loc[hotel, 'taux_occupation']) / 100
             rvp   = float(self.df.loc[hotel, 'revpar'])
             emp   = float(self.df.loc[hotel, 'nb_employes'])
@@ -587,7 +587,7 @@ class HotelDEAAnalyzer:
             if n < 100: return '🏠 Petit (<100 ch.)'
             if n < 200: return '🏨 Moyen (100-199 ch.)'
             return '🏢 Grand (>=200 ch.)'
-        return self.df['nb_lits'].apply(size_label).rename('groupe')
+        return self.df['nb_chambres'].apply(size_label).rename('groupe')
 
     def compute_metafrontier(self, groups: pd.Series, rts: str = 'vrs') -> pd.DataFrame:
         mte_scores  = {h: min(self.bcc_scores[h], 1.0) for h in self.hotels}
@@ -773,7 +773,7 @@ class HotelDEAAnalyzer:
             bcc = self.bcc_scores[hotel]; ccr = self.ccr_scores[hotel]; scale = self.scale_efficiency[hotel]
             slack_emp  = self.slacks[hotel]['inputs'].get('nb_employes', 0)
             slack_rev  = self.slacks[hotel]['outputs'].get('revpar', 0)
-            lits       = float(self.df.loc[hotel, 'nb_lits'])
+            lits       = float(self.df.loc[hotel, 'nb_chambres'])
             upside_fte = round(slack_emp * avg_salary)
             upside_rev = round(slack_rev * lits * 365 * revpar_value / 1_000)
             row = {'Hôtel': hotel, 'Score BCC': f"{bcc:.1%}", 'Score CCR': f"{ccr:.1%}",
@@ -786,7 +786,7 @@ class HotelDEAAnalyzer:
                    'Upside RevPAR (k€)': f"{upside_rev:,}" if upside_rev > 0 else '—',
                    'Upside Total (k€)': f"{upside_fte + upside_rev:,}" if upside_fte + upside_rev > 0 else '—',
                    'Priorité': ('✅ RAS' if bcc >= 0.95 else '🟡 Surveiller' if bcc >= 0.85 else '🔴 Action urgente')}
-            if self.has_trevpar: row['TRevPAR (€/lit/j)'] = self.trevpar.get(hotel, '—') or '—'
+            if self.has_trevpar: row['TRevPAR (€/chambre/j)'] = self.trevpar.get(hotel, '—') or '—'
             if self.has_goppam:  row['GOPPAM (€/m²)']     = self.goppam.get(hotel, '—')  or '—'
             rows.append(row)
         return pd.DataFrame(rows).sort_values('Rang TOPSIS').reset_index(drop=True)
@@ -1033,8 +1033,8 @@ class HotelDEAAnalyzer:
             cap = self.capital_metrics.get(hotel, {}); bcc = self.bcc_scores.get(hotel, 0)
             rows.append({'Hôtel': hotel, 'BCC': f"{bcc:.1%}",
                          'Rang TOPSIS': self.topsis_ranks.get(hotel, '—'),
-                         'Surface m²': cap.get('surface_m2'), 'm²/lit': cap.get('m2_par_lit'),
-                         'CAPEX annuel (€)': cap.get('capex_annuel'), 'CAPEX/lit (€)': cap.get('capex_par_lit'),
+                         'Surface m²': cap.get('surface_m2'), 'm²/chambre': cap.get('m2_par_chambre'),
+                         'CAPEX annuel (€)': cap.get('capex_annuel'), 'CAPEX/chambre (€)': cap.get('capex_par_chambre'),
                          'Rendement CAPEX (x)': cap.get('rendement_capex'), 'GOPPAM (€/m²)': cap.get('goppam'),
                          'Flow Through %': f"{cap.get('flow_through', 0):.1%}" if cap.get('flow_through') else '—',
                          'Source FT': cap.get('ft_source', '—'), 'Qualité FT': cap.get('ft_qualite', '—'),
@@ -1045,9 +1045,9 @@ class HotelDEAAnalyzer:
         needed = ['surface_m2', 'capex_annuel']
         if not all(c in self.df.columns for c in needed): return None
         df = self.df.copy()
-        cap_in  = ['surface_m2', 'capex_annuel', 'nb_lits']
+        cap_in  = ['surface_m2', 'capex_annuel', 'nb_chambres']
         df['_rev'] = (df['total_revenue'] if 'total_revenue' in df.columns
-                      else df['revpar'] * df['taux_occupation'] / 100 * 365 * df['nb_lits'])
+                      else df['revpar'] * df['taux_occupation'] / 100 * 365 * df['nb_chambres'])
         cap_out = ['_rev'] + (['gop'] if 'gop' in df.columns else [])
         X_in = df[cap_in].values.astype(float); X_out = df[cap_out].values.astype(float); n = len(self.hotels)
 
@@ -1086,7 +1086,7 @@ class HotelDEAAnalyzer:
                          'Δ (Capital-Opérat.)': f"{d:+.1%}",
                          'Lecture': ('✅ Capital bien employé' if d >= 0 else
                                      '⚠️ Surcoût capital modéré' if d >= -0.10 else '🔴 Capital sous-productif'),
-                         'CAPEX/lit (€)': cap.get('capex_par_lit'),
+                         'CAPEX/chambre (€)': cap.get('capex_par_chambre'),
                          'Rendement CAPEX': cap.get('rendement_capex'), 'GOPPAM (€/m²)': cap.get('goppam')})
         return pd.DataFrame(rows).sort_values('DEA Capital', ascending=False)
 
@@ -1159,7 +1159,7 @@ class HotelDEAAnalyzer:
     def compute_nondiscretionary_targets(
         self,
         hotel: str,
-        fixed_inputs: list,          # noms de colonnes verrouillées, ex. ['nb_lits']
+        fixed_inputs: list,          # noms de colonnes verrouillées, ex. ['nb_chambres']
     ) -> Optional[Dict]:
         """
         DEA avec inputs non-discrétionnaires — Banker & Morey (1986) Mgmt Sci.
