@@ -1,5 +1,5 @@
 """
-dea_model.py — DEA-H v4
+dea_model.py — DEA-H v3.9
 ═══════════════════════════════════════════════════════════════════════════════
 Moteur DEA unifié — REIV Hospitality
 
@@ -260,7 +260,7 @@ class HotelDEAAnalyzer:
 
             cap = {
                 'surface_m2'     : float(h['surface_m2']) if self.has_surface else None,
-                'm2_par_chambre' : (round(float(h['surface_m2']) / lits, 1)
+                'm2_par_lit'     : (round(float(h['surface_m2']) / lits, 1)
                                     if self.has_surface and lits > 0 else None),
                 'goppam'         : self.goppam[hotel],
             }
@@ -270,10 +270,10 @@ class HotelDEAAnalyzer:
                 total_rev = (float(h['total_revenue']) if self.has_trevpar
                              else float(h['revpar']) * float(h['taux_occupation']) / 100 * 365 * lits)
                 cap['capex_annuel']      = capex
-                cap['capex_par_chambre'] = round(capex / lits, 0) if lits > 0 else None
+                cap['capex_par_lit']     = round(capex / lits, 0) if lits > 0 else None
                 cap['rendement_capex']   = round(total_rev / capex, 2) if capex > 0 else None
             else:
-                cap['capex_annuel'] = cap['capex_par_chambre'] = cap['rendement_capex'] = None
+                cap['capex_annuel'] = cap['capex_par_lit'] = cap['rendement_capex'] = None
 
             if self.has_flow:
                 delta_gop = float(h['gop']) - float(h['gop_n1'])
@@ -767,7 +767,7 @@ class HotelDEAAnalyzer:
     # ─────────────────────────────────────────────
     #  Rapport Board
     # ─────────────────────────────────────────────
-    def generate_board_report(self, avg_salary: float = 35_000, revpar_value: float = 1_000) -> pd.DataFrame:
+    def generate_board_report(self, avg_salary: float = 35_000, revpar_value: float = 1) -> pd.DataFrame:
         rows = []
         for hotel in self.hotels:
             bcc = self.bcc_scores[hotel]; ccr = self.ccr_scores[hotel]; scale = self.scale_efficiency[hotel]
@@ -1033,8 +1033,8 @@ class HotelDEAAnalyzer:
             cap = self.capital_metrics.get(hotel, {}); bcc = self.bcc_scores.get(hotel, 0)
             rows.append({'Hôtel': hotel, 'BCC': f"{bcc:.1%}",
                          'Rang TOPSIS': self.topsis_ranks.get(hotel, '—'),
-                         'Surface m²': cap.get('surface_m2'), 'm²/chambre': cap.get('m2_par_chambre'),
-                         'CAPEX annuel (€)': cap.get('capex_annuel'), 'CAPEX/chambre (€)': cap.get('capex_par_chambre'),
+                         'Surface m²': cap.get('surface_m2'), 'm²/lit': cap.get('m2_par_lit'),
+                         'CAPEX annuel (€)': cap.get('capex_annuel'), 'CAPEX/lit (€)': cap.get('capex_par_lit'),
                          'Rendement CAPEX (x)': cap.get('rendement_capex'), 'GOPPAM (€/m²)': cap.get('goppam'),
                          'Flow Through %': f"{cap.get('flow_through', 0):.1%}" if cap.get('flow_through') else '—',
                          'Source FT': cap.get('ft_source', '—'), 'Qualité FT': cap.get('ft_qualite', '—'),
@@ -1050,6 +1050,21 @@ class HotelDEAAnalyzer:
                       else df['revpar'] * df['taux_occupation'] / 100 * 365 * df['nb_lits'])
         cap_out = ['_rev'] + (['gop'] if 'gop' in df.columns else [])
         X_in = df[cap_in].values.astype(float); X_out = df[cap_out].values.astype(float); n = len(self.hotels)
+
+        # ── Sanitation : PuLP refuse NaN/inf et les inputs nuls rendent le PL dégénéré ──
+        # Réf. : Cooper, Seiford & Tone (2007) — les données DEA doivent être strictement positives
+        X_in  = np.nan_to_num(X_in,  nan=0.0, posinf=0.0, neginf=0.0)
+        X_out = np.nan_to_num(X_out, nan=0.0, posinf=0.0, neginf=0.0)
+        if not np.isfinite(X_in).all() or not np.isfinite(X_out).all():
+            return None
+        # Colonnes entièrement nulles/négatives → écartées (input ou output non renseigné)
+        _keep_in  = [j for j in range(X_in.shape[1])  if (X_in[:, j]  > 0).all()]
+        _keep_out = [j for j in range(X_out.shape[1]) if (X_out[:, j] > 0).all()]
+        if not _keep_in or not _keep_out:
+            return None   # données capital incomplètes — Tab affichera un message
+        X_in  = X_in[:,  _keep_in]
+        X_out = X_out[:, _keep_out]
+
         cap_scores = {}
         for i, hotel in enumerate(self.hotels):
             model   = pulp.LpProblem(f"CAP_DEA_{i}", pulp.LpMinimize)
@@ -1071,7 +1086,7 @@ class HotelDEAAnalyzer:
                          'Δ (Capital-Opérat.)': f"{d:+.1%}",
                          'Lecture': ('✅ Capital bien employé' if d >= 0 else
                                      '⚠️ Surcoût capital modéré' if d >= -0.10 else '🔴 Capital sous-productif'),
-                         'CAPEX/chambre (€)': cap.get('capex_par_chambre'),
+                         'CAPEX/lit (€)': cap.get('capex_par_lit'),
                          'Rendement CAPEX': cap.get('rendement_capex'), 'GOPPAM (€/m²)': cap.get('goppam')})
         return pd.DataFrame(rows).sort_values('DEA Capital', ascending=False)
 
@@ -1371,6 +1386,7 @@ def run_multi_module(
     dmu_col: str,
     active_modules: list,
     variable_overrides: Optional[dict] = None,
+    proxy_cols: Optional[set] = None,
 ) -> Dict[str, ModuleResult]:
     """
     Exécute le moteur DEA scipy pour chaque module actif sur le même dataset.
@@ -1380,6 +1396,13 @@ def run_multi_module(
         dmu_col         : colonne identifiant les DMUs (nom hôtel)
         active_modules  : liste des module_ids à exécuter
         variable_overrides : {module_id: {"inputs": [...], "outputs": [...]}}
+        proxy_cols      : colonnes calculées par reformulation d'autres colonnes
+                          (ex. rooms_revenue, adr, trevpar dérivés du RevPAR) —
+                          ne comptent pas pour satisfaire les "required" d'un
+                          module (cf. check_module_feasibility), pour éviter
+                          qu'un module se déclare calculable sur une simple
+                          reformulation arithmétique plutôt que sur une vraie
+                          donnée départementale/marché.
 
     Returns:
         {module_id: ModuleResult}
@@ -1392,7 +1415,7 @@ def run_multi_module(
             continue
 
         mod_cfg    = MODULES[mod_id]
-        feasibility = check_module_feasibility(mod_id, available_cols)
+        feasibility = check_module_feasibility(mod_id, available_cols, proxy_cols=proxy_cols)
 
         if not feasibility['feasible']:
             results[mod_id] = ModuleResult(
