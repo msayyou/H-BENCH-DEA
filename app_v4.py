@@ -9,104 +9,6 @@ import plotly.express as px
 from datetime import datetime
 import warnings
 
-# =====================================================================
-# SNIPPET DE TRACKING DE VISITES
-# =====================================================================
-# Envoie une notification push (ntfy.sh) + log local des visites.
-# =====================================================================
-
-import streamlit as st
-import requests
-from datetime import datetime
-import json
-import os
-
-# ============ CONFIGURATION — À PERSONNALISER ============
-NTFY_TOPIC = "KDS2124413"  # <-- CHANGE CECI (nom unique et secret)
-LOG_FILE = "visit_log.json"
-# ===========================================================
-
-def _send_notification(session_id: str):
-    """Envoie une notif push instantanée via ntfy.sh (erreurs loguées, jamais bloquantes)."""
-    try:
-        print(f"[TRACKER] Tentative envoi notif vers ntfy.sh/{NTFY_TOPIC}...")
-        resp = requests.post(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=f"Nouvelle visite sur DEA-H - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}".encode("utf-8"),
-            headers={
-                "Title": "REIV - DEA-H",
-                "Priority": "default",
-                "Tags": "eyes"
-            },
-            timeout=10,
-        )
-        print(f"[TRACKER] Reponse ntfy.sh : status={resp.status_code} body={resp.text[:200]}")
-    except Exception as e:
-        print(f"[TRACKER] ECHEC envoi notification : {type(e).__name__}: {e}")
-
-def _log_visit():
-    """Enregistre la visite dans un fichier JSON local (persiste tant que l'instance tourne)."""
-    entry = {"timestamp": datetime.now().isoformat()}
-    log = []
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, "r") as f:
-                log = json.load(f)
-        except Exception:
-            log = []
-    log.append(entry)
-    try:
-        with open(LOG_FILE, "w") as f:
-            json.dump(log, f)
-    except Exception:
-        pass
-
-def track_visit():
-    """À appeler UNE FOIS en haut du script principal, avant tout autre st.* """
-    print(f"[TRACKER] track_visit() appelée. Deja trackee cette session ? {'visit_tracked' in st.session_state}")
-    if "visit_tracked" not in st.session_state:
-        st.session_state.visit_tracked = True
-        _log_visit()
-        _send_notification(st.session_state.get("session_id", "anonyme"))
-
-def show_visit_dashboard():
-    """
-    Tableau de bord caché — affiche le nombre de visites et les dates.
-    Accessible uniquement via l'URL avec ?admin=1 à la fin
-    (ex: https://p-l-usali-1.onrender.com/?admin=1)
-    Place cet appel n'importe où dans ton script (ex: dans la sidebar).
-    """
-    query_params = st.query_params
-    if query_params.get("admin") == "1":
-        with st.sidebar.expander("📊 Suivi des visites (admin)", expanded=True):
-            if os.path.exists(LOG_FILE):
-                with open(LOG_FILE, "r") as f:
-                    log = json.load(f)
-                st.metric("Total visites (depuis dernier redémarrage)", len(log))
-                for entry in reversed(log[-15:]):
-                    ts = datetime.fromisoformat(entry["timestamp"])
-                    st.text(ts.strftime("%d/%m/%Y à %H:%M:%S"))
-            else:
-                st.text("Aucune visite enregistrée pour l'instant.")
-
-# ============ À AJOUTER DANS TON SCRIPT PRINCIPAL ============
-# Juste après tes imports, avant le reste du code de l'app :
-#
-#   track_visit()
-#   show_visit_dashboard()
-#
-# ===============================================================
-print("[TRACKER] === Debut du bloc tracker, script atteint cette ligne ===")
-try:
-    track_visit()
-except Exception as e:
-    print(f"[TRACKER] ERREUR dans track_visit(): {type(e).__name__}: {e}")
-try:
-    show_visit_dashboard()
-except Exception as e:
-    print(f"[TRACKER] ERREUR dans show_visit_dashboard(): {type(e).__name__}: {e}")
-print("[TRACKER] === Fin du bloc tracker ===")
-
 from dea_model import HotelDEAAnalyzer, QUADRANT_LABELS
 
 # ── Multi-Module DEA-H (v3.2) ────────────────────────────────────────────────
@@ -354,6 +256,7 @@ def generate_fiche_actif_pdf(
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
     story.append(Paragraph(
         "DEA-H v3.5 · REIV Hospitality · "
+        "Charnes et al. (1978), Banker et al. (1984), Barros (2005) · "
         "Confidentiel — usage interne asset manager",
         small_s
     ))
@@ -373,9 +276,9 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     Rapport PDF portfolio — document de comité d'investissement.
 
     Contenu : couverture, note de lecture, dashboard, quadrants, TOPSIS,
-    SBM, Super-Efficience,
-    Slacks, Métafrontière,
-    Simar-Wilson, Efficience Capital, DEA Capital vs Opérationnel,
+    SBM (Tone 2001), Super-Efficience (Andersen & Petersen 1993),
+    Slacks (Barros 2005), Métafrontière (O'Donnell et al. 2008),
+    Simar-Wilson (2007), Efficience Capital, DEA Capital vs Opérationnel,
     Expense Flex & Flow Through (Russo & Legel).
     """
     if not REPORTLAB_AVAILABLE:
@@ -483,7 +386,6 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         'capital_bas' : "Capital sous-productif",
         'ft_faible'   : "Conversion faible",
         'recul'       : "En recul vs N-1",
-        'sous_marche' : "Sous son marché",
     }
     def _sig(h, k):
         if h in _sig_reg:
@@ -538,7 +440,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         story.append(Spacer(1, 4))
         story.append(_lecture(
             f"Le portefeuille compte {dea.n} unités pour {_n_var} variables. La règle "
-            f"empirique recommande n &gt;= 3(m+s) = "
+            f"empirique de Cooper, Seiford &amp; Tone (2007) recommande n &gt;= 3(m+s) = "
             f"{_seuil}. En deçà, le pouvoir discriminant de la DEA se réduit et les scores "
             "doivent être lus comme des ordres de grandeur, non comme des mesures fines. "
             "L'analyse par métafrontière ci-après atténue partiellement cette limite."))
@@ -546,8 +448,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ DASHBOARD ══════════════════
     story.append(Paragraph("1. Dashboard portefeuille", h1_s))
     story.append(Paragraph(
-        "Modèle BCC orienté input, rendements d'échelle variables. "
-        "L'efficacité d'échelle (CCR/BCC) isole la part de l'inefficience "
+        "Modèle BCC orienté input, rendements d'échelle variables — Banker, Charnes &amp; "
+        "Cooper (1984). L'efficacité d'échelle (CCR/BCC) isole la part de l'inefficience "
         "imputable à une taille inadaptée au marché.", meth_s))
 
     avg_bcc   = sum(dea.bcc_scores.values()) / len(dea.bcc_scores)
@@ -579,7 +481,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         story.append(_lecture(
             f"{_pct_eff:.0%} des actifs sont efficients — le modèle discrimine peu. "
             "Réduire le nombre de variables ou élargir l'échantillon renforcerait le "
-            "pouvoir de séparation."))
+            "pouvoir de séparation (Vía et al., 2013)."))
     else:
         _gap_moy = 1 - avg_bcc
         story.append(_lecture(
@@ -645,7 +547,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ TOPSIS ══════════════════
     story.append(Paragraph("3. Classement multicritère TOPSIS", h1_s))
     story.append(Paragraph(
-        "Hwang &amp; Yoon. Le score DEA seul ne suffit pas à hiérarchiser : deux "
+        "Hwang &amp; Yoon (1981). Le score DEA seul ne suffit pas à hiérarchiser : deux "
         "hôtels à 100 % ne sont pas équivalents pour un investisseur. TOPSIS agrège "
         "efficience, échelle, RevPAR et occupation en mesurant la distance à la solution "
         "idéale et à la solution anti-idéale.", meth_s))
@@ -663,7 +565,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ SUPER-EFFICIENCE ══════════════════
     story.append(Paragraph("4. Super-efficience — départager les actifs à 100 %", h1_s))
     story.append(Paragraph(
-        "Andersen &amp; Petersen. La DEA classique plafonne à 1 : tous les actifs "
+        "Andersen &amp; Petersen (1993). La DEA classique plafonne à 1 : tous les actifs "
         "efficients sont ex aequo. La super-efficience réévalue chaque unité en l'excluant "
         "de sa propre référence. Un score de 1,45 indique que l'hôtel pourrait consommer "
         "45 % de ressources en plus tout en restant sur la frontière — c'est une mesure de "
@@ -723,7 +625,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ SBM ══════════════════
     story.append(Paragraph("5. SBM — efficience fondée sur les écarts", h1_s))
     story.append(Paragraph(
-        "Tone. Le modèle radial BCC réduit tous les inputs dans la même proportion "
+        "Tone (2001). Le modèle radial BCC réduit tous les inputs dans la même proportion "
         "et ignore les écarts résiduels. Un hôtel peut ainsi afficher 100 % tout en "
         "gaspillant sur un poste précis. Le SBM intègre directement ces écarts : il est "
         "systématiquement plus sévère, et c'est précisément son intérêt — il révèle les "
@@ -776,7 +678,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ SLACKS ══════════════════
     story.append(Paragraph("6. Slacks — gaspillages et potentiels chiffrés", h1_s))
     story.append(Paragraph(
-        "C'est la section la plus opérationnelle du rapport. Le slack "
+        "Barros (2005). C'est la section la plus opérationnelle du rapport. Le slack "
         "traduit le score d'efficience en unités physiques : ETP en excès, euros de RevPAR "
         "non captés, points d'occupation manquants. Les cibles sont issues du comportement "
         "réel des pairs, non d'un objectif budgétaire théorique.", meth_s))
@@ -881,7 +783,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ METAFRONTIERE ══════════════════
     story.append(Paragraph("7. Métafrontière — GTE, MTE et écart technologique", h1_s))
     story.append(Paragraph(
-        "Comparer un resort familial de 1 100 clés à "
+        "O'Donnell, Rao &amp; Battese (2008). Comparer un resort familial de 1 100 clés à "
         "une boutique urbaine de 90 clés n'a pas de sens : ces actifs n'opèrent pas sous la "
         "même technologie de production. La métafrontière décompose l'efficience en deux "
         "composantes distinctes.", meth_s))
@@ -948,7 +850,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     # ══════════════════ SIMAR-WILSON ══════════════════
     story.append(Paragraph("8. Déterminants de l'efficience — régression tronquée bootstrappée", h1_s))
     story.append(Paragraph(
-        "Algorithme 1. Les scores DEA sont mécaniquement "
+        "Simar &amp; Wilson (2007), Algorithme 1. Les scores DEA sont mécaniquement "
         "corrélés entre eux — chaque score dépend de l'échantillon entier — ce qui invalide "
         "les tests statistiques usuels. La procédure exclut les unités efficientes "
         "(troncature) puis reconstruit la distribution des coefficients par bootstrap "
@@ -974,7 +876,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             _n_ineff = sum(1 for s in dea.bcc_scores.values() if s < 1 - 1e-8)
 
             # Une variable du modèle DEA ne peut pas expliquer le score qu'elle
-            # a servi à produire — endogénéité.
+            # a servi à produire — endogénéité (Simar & Wilson 2007, §2).
             _dea_vars = set(getattr(dea, 'input_cols', [])) | set(getattr(dea, 'output_cols', []))
 
             _env, _fams = [], set()
@@ -998,7 +900,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             _env = _env[:max(0, min(3, _n_ineff - 2))]
             if len(_env) >= 2:
                 # Le coût du bootstrap croît avec n et k — on l'ajuste pour que la
-                # génération du rapport reste sous la minute.
+                # génération du rapport reste sous la minute. Simar & Wilson (2007)
                 # retiennent B = 100 pour l'algorithme 1 ; l'onglet Stage 2 permet
                 # de monter jusqu'à 500 pour une estimation de publication.
                 _B = 100 if dea.n <= 15 else 60 if dea.n <= 30 else 40
@@ -1256,7 +1158,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             "Flow Through = &#916;GOP / &#916;CA — part de chaque euro de revenu "
             "supplémentaire qui atteint le résultat. Expense Flex = 1 - FT lorsque le "
             "revenu recule ; il mesure la capacité à flexibiliser les charges en phase de "
-            f"repli. Norme retenue : {_TH['ft_norm']:.0%}.", meth_s))
+            f"repli. Norme retenue : {_TH['ft_norm']:.0%}. Réf. : Russo &amp; Legel, hospitality "
+            "management accounting.", meth_s))
 
         _hn1 = ('revpar_n1' in dea.df.columns and 'gop_n1' in dea.df.columns
                 and dea.df['revpar_n1'].fillna(0).sum() > 0
@@ -1327,7 +1230,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     story.append(PageBreak())
     story.append(Paragraph("12. Malmquist — évolution de la productivité N-1 vers N", h1_s))
     story.append(Paragraph(
-        "Toutes les sections "
+        "Caves, Christensen &amp; Diewert (1982) ; Färe et al. (1994). Toutes les sections "
         "précédentes photographient un instant. Celle-ci mesure le mouvement. Un hôtel "
         "peut afficher un score médiocre tout en progressant fortement — c'est une "
         "information d'investissement différente de celle d'un actif stable et efficient.",
@@ -1400,89 +1303,6 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     except Exception as _e:
         story.append(Paragraph(f"Malmquist non calculable ({_clean(_e, 90)}).", body_s))
 
-    # ══════════════════ BENCHMARK MARCHE ══════════════════
-    story.append(Paragraph("13. Positionnement marché — RGI, ARI et MPI", h1_s))
-    story.append(Paragraph(
-        "Indices de pénétration standard du secteur (méthodologie STR). Toutes les "
-        "sections précédentes comparent les hôtels entre eux. Celle-ci les compare à leur "
-        "marché local — un portefeuille peut être homogène en interne et collectivement "
-        "sous-performant.", meth_s))
-    story.append(Paragraph(
-        "<b>RGI</b> (revenue generation index) = RevPAR de l'hôtel / RevPAR du marché, "
-        "base 100. C'est l'indice de synthèse : au-dessus de 100, l'hôtel capte plus que "
-        "sa part de marché. <b>ARI</b> (average rate index) compare le prix moyen : il "
-        "révèle le pouvoir de tarification. <b>MPI</b> (market penetration index) compare "
-        "l'occupation : il révèle la force commerciale et la distribution.", body_s))
-    story.append(Paragraph(
-        "Le croisement ARI x MPI est le plus instructif. ARI élevé avec MPI faible : "
-        "l'hôtel vend cher mais remplit mal — stratégie de prix trop agressive, ou "
-        "distribution insuffisante. ARI faible avec MPI élevé : l'hôtel remplit en bradant "
-        "— il achète son occupation, au détriment de la marge. Les deux au-dessus de 100 "
-        "définissent le vrai leader de marché.", body_s))
-
-    _mk_rev = next((c for c in dea.df.columns if 'revpar' in c.lower() and 'march' in c.lower()), None)
-    _mk_adr = next((c for c in dea.df.columns if 'adr'    in c.lower() and 'march' in c.lower()), None)
-    _mk_occ = next((c for c in dea.df.columns if 'occ'    in c.lower() and 'march' in c.lower()), None)
-
-    if _mk_rev is None:
-        story.append(Paragraph(
-            "Données compset absentes. Cette analyse requiert au minimum une colonne "
-            "« RevPAR marché » par actif — le référentiel doit être le marché local de "
-            "chaque hôtel et sa catégorie, non une moyenne nationale.", body_s))
-    else:
-        bd = [["Hôtel", "RevPAR", "RevPAR marché", "RGI", "ARI", "MPI", "Position"]]
-        _rgis = []
-        for h in dea.hotels:
-            try:
-                _rv  = _v(h, 'revpar')
-                _mrv = _v(h, _mk_rev)
-            except Exception:
-                continue
-            if _mrv <= 0:
-                continue
-            _rgi = _rv / _mrv * 100
-            if _rgi < _TH['rgi']:
-                _sig(h, 'sous_marche')
-            _rgis.append((h, _rgi))
-            _occ = _v(h, 'taux_occupation')
-            _ari = _mpi = None
-            if _mk_adr and _v(h, _mk_adr) > 0 and _occ > 0:
-                _ari = (_rv / (_occ / 100)) / _v(h, _mk_adr) * 100
-            if _mk_occ and _v(h, _mk_occ) > 0:
-                _mpi = _occ / _v(h, _mk_occ) * 100
-
-            if _ari is not None and _mpi is not None:
-                _pos = ("Leader de marché"      if _ari >= 100 and _mpi >= 100 else
-                        "Prix fort, remplissage faible" if _ari >= 100 else
-                        "Remplit en bradant"    if _mpi >= 100 else
-                        "En retrait sur les deux axes")
-            else:
-                _pos = ("Au-dessus du marché" if _rgi >= 110 else
-                        "Dans le marché"      if _rgi >= 90  else "Sous le marché")
-            bd.append([_clean(h, 42), f"{_rv:.0f} €", f"{_mrv:.0f} €", f"{_rgi:.0f}",
-                       f"{_ari:.0f}" if _ari else "—",
-                       f"{_mpi:.0f}" if _mpi else "—", _pos])
-
-        if len(bd) > 1:
-            story.append(_tbl(bd, [6.2*cm, 1.5*cm, 2.0*cm, 1.2*cm, 1.2*cm, 1.2*cm, 4.1*cm],
-                              align_right=[1, 2, 3, 4, 5]))
-            _avg_rgi = sum(v for _, v in _rgis) / len(_rgis)
-            _under   = [h for h, v in _rgis if v < _TH['rgi']]
-            story.append(_lecture(
-                f"RGI moyen du portefeuille : {_avg_rgi:.0f}. "
-                + ("L'ensemble capte plus que sa part de marché — le portefeuille est "
-                   "bien positionné et les écarts internes relèvent de l'exploitation."
-                   if _avg_rgi >= _TH['rgi'] else
-                   "Le portefeuille capte moins que sa part de marché. C'est un signal "
-                   "distinct de tout ce qui précède : un hôtel peut être efficient au sens "
-                   "DEA — bien géré au regard de ses pairs internes — tout en "
-                   "sous-performant son marché. Les deux diagnostics doivent être croisés "
-                   "avant toute décision.")
-                + (f" {len(_under)} actif(s) sous l'indice {_TH['rgi']}." if _under else "")))
-        else:
-            story.append(Paragraph(
-                "Aucun actif ne dispose d'une référence marché exploitable.", body_s))
-
     # ══════════════════ SIGNAUX CUMULÉS ══════════════════
     story.append(PageBreak())
     story.append(Paragraph("Signaux cumulés — lecture transversale", h1_s))
@@ -1534,16 +1354,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                                "trajectoire est baissière. Le diagnostic apparent "
                                "sous-estime le problème ; auditer les postes identifiés "
                                "en section Slacks."))
-            elif {'sous_marche', 'critique'} <= s:
-                _combi.append((h, "Double sous-performance interne et externe",
-                               "L'actif est en retard sur ses pairs du portefeuille et "
-                               "sur son marché local. Les deux référentiels convergent : "
-                               "le problème est propre à l'actif, pas au segment."))
-            elif {'double_peine', 'sous_marche'} <= s:
-                _combi.append((h, "Handicap structurel confirmé par le marché",
-                               "Gestion et dimensionnement déficients, dans un actif qui "
-                               "capte en outre moins que sa part de marché. Le "
-                               "repositionnement doit précéder tout investissement."))
+
         if _combi:
             story.append(Spacer(1, 6))
             story.append(Paragraph("Combinaisons appelant une décision", h2_s))
@@ -1612,8 +1423,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         + f" : actif critique sous {_TH['crit']:.0%} de BCC, Flow Through de référence "
         f"{_TH['ft_norm']:.0%} (alerte sous {_TH['ft_low']:.0%}), écart BCC-SBM signalé "
         f"au-delà de {_TH['sbm']*100:.0f} points, écart technologique au-delà de "
-        f"{_TH['tgr']*100:.0f} points, amplitude GOPPAM au-delà de {_TH['goppam']:.1f}x, "
-        f"parité marché à RGI {_TH['rgi']}."
+        f"{_TH['tgr']*100:.0f} points, amplitude GOPPAM au-delà de {_TH['goppam']:.1f}x."
         + ("  Ces valeurs ont été modifiées par rapport aux réglages par défaut ; "
            "elles doivent être cohérentes avec le positionnement du portefeuille."
            if _TH_CUSTOM else ""), small_s))
@@ -1622,7 +1432,10 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     story.append(HRFlowable(width="100%", thickness=0.5, color=NAVY))
     story.append(Paragraph(
         "DEA-H v4 &#183; REIV Hospitality &#183; "
-        "Confidentiel",
+        "Charnes, Cooper &amp; Rhodes (1978) &#183; Banker, Charnes &amp; Cooper (1984) &#183; "
+        "Andersen &amp; Petersen (1993) &#183; Tone (2001) &#183; Barros (2005) &#183; "
+        "Simar &amp; Wilson (2007) &#183; O'Donnell et al. (2008) &#183; "
+        "Pulina &amp; Santoni (2018) &#183; Confidentiel",
         small_s))
 
     doc.build(story)
@@ -1834,7 +1647,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption(
         "💡 Si votre compset mélange des catégories (3★/5★, urban/resort), utilisez l'onglet "
-        "**🌐 Metafrontière** pour corriger le biais inter-segments via GTE/TGR."
+        "**🌐 Metafrontière** pour corriger le biais inter-segments via GTE/TGR (Assaf et al. 2010)."
     )
 
     st.markdown("---")
@@ -1869,18 +1682,15 @@ with st.sidebar:
         _th_goppam = st.slider("Amplitude GOPPAM signalée (×)", 1.5, 5.0, 2.5, 0.1,
                                key='th_goppam',
                                help="Rapport max/min du GOP par m² au-delà duquel l'hétérogénéité est commentée.")
-        _th_rgi    = st.slider("RGI — parité marché", 80, 120, 100, 1,
-                               key='th_rgi',
-                               help="Indice de référence : 100 = l'actif capte exactement sa part de marché.")
 
     REPORT_THRESHOLDS = {
         'crit'  : _th_crit,   'ft_norm': _th_ft,     'ft_low': _th_ft_low,
         'sbm'   : _th_sbm / 100.0,  'tgr': _th_tgr / 100.0,
-        'goppam': _th_goppam, 'rgi'   : _th_rgi,
+        'goppam': _th_goppam,
     }
 
     st.markdown("---")
-    st.subheader("📐 Mode variables")
+    st.subheader("📐 Mode variables (Raab & Lichty, 2002)")
     _n_hotels = len(df) if 'df' in dir() else 0
     if _n_hotels > 0 and _n_hotels < 18:
         st.warning(f"⚠️ {_n_hotels} hôtels — en dessous du seuil standard (18). Voir mode ci-dessous.")
@@ -1894,7 +1704,7 @@ with st.sidebar:
             'minimal' : f"Minimal (2+1) — min 9 hôtels  · ETP + OpEx → RevPAR",
         }[x],
         help="Réduire les variables si votre compset est petit. "
-             "Règle : n_hôtels ≥ 3 × (n_inputs + n_outputs).",
+             "Règle : n_hôtels ≥ 3 × (n_inputs + n_outputs). Réf. : Raab & Lichty (2002).",
         index=0,
     )
 
@@ -1911,12 +1721,12 @@ with st.sidebar:
         options=['input', 'output'],
         format_func=lambda x: "📥 Input-Oriented (plan restructuration)" if x == 'input'
                                else "📤 Output-Oriented (plan croissance)",
-        help="Input : 'De combien réduire les ressources ?' / Output : 'De combien augmenter les revenus ?'",
+        help="Input : 'De combien réduire les ressources ?' / Output : 'De combien augmenter les revenus ?' (Barros, 2005)",
     )
 
     st.markdown("---")
     with st.expander("⚖️ Poids TOPSIS (Cornell methodology)", expanded=False):
-        st.caption("Somme des poids = 1. Défaut Cornell : BCC 35% · Scale 25% · RevPAR 25% · TO 15%")
+        st.caption("Charnes et al. (1978) — Somme des poids = 1. Défaut Cornell : BCC 35% · Scale 25% · RevPAR 25% · TO 15%")
         _w_bcc    = st.slider("BCC (Gestion pure)",   0.0, 1.0, 0.35, 0.05, key='w_bcc')
         _w_scale  = st.slider("Scale Efficiency",     0.0, 1.0, 0.25, 0.05, key='w_scale')
         _w_revpar = st.slider("RevPAR",               0.0, 1.0, 0.25, 0.05, key='w_revpar')
@@ -1967,6 +1777,7 @@ def load_sample() -> pd.DataFrame:
         'classement_etoiles': [5, 4, 4, 4, 4, 3, 5, 5, 5, 4, 5, 3, 3, 4, 5, 4, 3, 3, 4, 4, 3, 5, 4, 3],
         'categorie': ['4★ Sup','4★','4★','4★','4★','3★','4★','5★','5★','4★','4★','3★','3★','4★','4★','4★','3★','4★','4★','4★','3★','4★','4★','4★'],
         # Saisonnalité : 1=resort/côtier/montagne (haute saison), 0=urbain/année ronde
+        # Réf. : Pulina & Santoni (2018) ; Cracolici et al. (2008)
         'saison_dummy': [1,1,1,1,1,1,1,1,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,1],
         'energy_kwh': [2190000, 2883500, 1679000, 3120750, 2646250, 2764875, 2482000, 1642500, 2500250, 3248500, 3650000, 1596875, 1815875, 1359625, 2628000, 2354250, 7245250, 2737500, 3129875, 2016625, 1669875, 930750, 4973125, 7290875],
         'water_m3': [43800, 57670, 33580, 62415, 52925, 55298, 49640, 32850, 50005, 64970, 73000, 31938, 36318, 27193, 52560, 47085, 144905, 54750, 62598, 40333, 33398, 18615, 99463, 145818],
@@ -2075,7 +1886,7 @@ if uploaded_file is not None:
             f"dans : {', '.join(NUMERIC_COLS)}"
         )
 
-    # ── Détection valeurs négatives ou nulles ──────
+    # ── Détection valeurs négatives ou nulles (Pastor 1996 / Tone 2001) ──────
     _neg_issues = []
     for _col in ['revpar', 'taux_occupation', 'nb_lits', 'nb_employes']:
         if _col in df.columns:
@@ -2248,12 +2059,12 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
     else:
         st.success("✅ Analyse terminée !")
 
-        # Signal Pastor si translation appliquée
+        # Signal Pastor (1996) si translation appliquée
         if getattr(dea, 'translation_applied', {}):
             _trans = dea.translation_applied
             _detail = ', '.join(f'{k} (décalage +{v})' for k, v in _trans.items())
             st.info(
-                f"ℹ️ **Translation invariance appliquée — Pastor** : {_detail}. "
+                f"ℹ️ **Translation invariance appliquée — Pastor (1996)** : {_detail}. "
                 "Valeurs non strictement positives détectées et corrigées automatiquement. "
                 "BCC-VRS est translation-invariant pour les outputs — scores valides. "
                 "Scores CCR calculés sur données originales (CCR non translation-invariant)."
@@ -2286,7 +2097,7 @@ best_topsis = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
 # ─────────────────────────────────────────────
 #  11 ONGLETS
 # ─────────────────────────────────────────────
-tab_board, tab_kpi, tab_topsis, tab_quad, tab_slacks, tab_fiche, tab_meta, tab_malm, tab_bmark, tab_capital, tab_budget, tab_synth = st.tabs([
+tab_board, tab_kpi, tab_topsis, tab_quad, tab_slacks, tab_fiche, tab_meta, tab_malm, tab_capital, tab_budget, tab_synth = st.tabs([
     "📋 Rapport Board",
     "📈 Dashboard KPIs",
     "🏆 Classement TOPSIS",
@@ -2295,7 +2106,6 @@ tab_board, tab_kpi, tab_topsis, tab_quad, tab_slacks, tab_fiche, tab_meta, tab_m
     "🔍 Fiche Actif",
     "🌐 Metafrontière",
     "📈 Malmquist & Dynamique Temporelle",
-    "📊 Benchmark Marché",
     "💰 Capital & Flow Through",
     "📁 Variance Budget",
     "📥 Synthèse & Rapport Final",
@@ -2308,7 +2118,7 @@ with tab_board:
 
     # ── Alerte ratio DMUs/variables ──────────────────────────────────────────
     if getattr(dea, '_dmu_ratio_warning', False):
-        st.warning(f"⚠️ **Ratio DMUs/variables insuffisant** : {dea._dmu_ratio_info}")
+        st.warning(f"⚠️ **Ratio DMUs/variables insuffisant** : {dea._dmu_ratio_info} — Réf. : Raab & Lichty (2002).")
 
     # ── Header contextuel ────────────────────────────────────────────────────
     _orient_lbl = "📥 Input-Oriented" if getattr(dea, 'orientation', 'input') == 'input' else "📤 Output-Oriented"
@@ -2342,7 +2152,7 @@ with tab_board:
         _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
         _up_fte += _se * avg_salary / 1000
         # CA = RevPAR × chambres × jours. Ne PAS multiplier par le taux
-        # d'occupation : RevPAR = ADR × OCC l'intègre déjà.
+        # d'occupation : RevPAR = ADR × OCC l'intègre déjà (USALI / Kimes 1989).
         _ca_tot += _rvp * _lits * jours_exploit * revpar_value / 1_000_000
         _up_rev += _sr  * _lits * jours_exploit * revpar_value / 1_000_000
         _up_gop += _sr  * _lits * jours_exploit * revpar_value * ft_pct / 1_000_000
@@ -2535,7 +2345,7 @@ with tab_board:
     q_summary = dea.get_quadrant_summary()
     st.dataframe(q_summary.drop(columns=['Hôtels'], errors='ignore'), use_container_width=True, hide_index=True)
     st.markdown('<p class="section-title">Détection Outliers — Distance de Mahalanobis</p>', unsafe_allow_html=True)
-    st.caption("D² ∼ χ²(k). Outlier si p < 0.01.")
+    st.caption("Poldrugovac et al. (2016) — D² ∼ χ²(k). Outlier si p < 0.01.")
     _mah_df = dea.detect_outliers_mahalanobis(threshold_p=0.01)
     _n_out  = _mah_df['Outlier'].sum()
     if _n_out > 0:
@@ -2544,7 +2354,8 @@ with tab_board:
         st.success("✅ Aucun outlier (p > 0.01) — compset homogène.")
     st.dataframe(_mah_df, use_container_width=True, hide_index=True)
 
-
+    st.caption("📚 *Réf. : Charnes, Cooper & Rhodes (1978) · Banker et al. (1984) · "
+               "Poldrugovac et al. (2016) Mahalanobis · Hwang & Yoon (1981) TOPSIS.*")
 
 
 # ── Recommandations SBM par variable ─────────────────────────────────────────
@@ -2607,6 +2418,7 @@ def _sbm_dominant_analysis(sbm_hotel: dict, dea, hotel: str) -> dict:
 with tab_kpi:
     st.markdown('<p class="section-title">Distribution des scores d\'efficacité</p>', unsafe_allow_html=True)
 
+    # ── Signal benchmark % hôtels efficients (Poldrugovac et al. 2016 ; papier Via@ 2013) ──
     _n_eff_t2  = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
     _pct_eff   = _n_eff_t2 / dea.n
 
@@ -2679,13 +2491,14 @@ with tab_kpi:
     )
     st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # ── SBM — Score non-radial ───────────────────────────────────
-    st.markdown('<p class="section-title">📐 SBM — Score non-radial</p>', unsafe_allow_html=True)
+    # ── SBM — Score non-radial (Tone 2001) ───────────────────────────────────
+    st.markdown('<p class="section-title">📐 SBM — Score non-radial (Tone 2001)</p>', unsafe_allow_html=True)
     st.caption(
         "SBM (Slack-Based Measure) mesure l'inefficience directement via les slacks inputs ET outputs. "
         "Contrairement à BCC/CCR (modèles radiaux), SBM gère nativement les GOP négatifs, "
         "RevPAR nuls et variables d'environnement non-positives — idéal pour les actifs en difficulté "
-        "ou en repositionnement. ⚠️ Score NON comparable au score BCC."
+        "ou en repositionnement. ⚠️ Score NON comparable au score BCC. "
+        "Réf. : Tone (2001) EJOR ; Tone & Tsutsui (2010)."
     )
     if st.button("🔄 Calculer SBM (tous les hôtels)", key="sbm_btn_t2"):
         with st.spinner("Calcul SBM en cours…"):
@@ -2774,7 +2587,7 @@ with tab_topsis:
     _adv_col1, _adv_col2 = st.columns(2)
 
     with _adv_col1:
-        st.markdown("**Super-Efficience — Andersen & Petersen**")
+        st.markdown("**Super-Efficience — Andersen & Petersen (1993)**")
         st.caption(
             "Les DMUs efficients (BCC=1) reçoivent un score > 1 : "
             "ils pourraient consommer plus d'inputs tout en restant hors de la frontière "
@@ -2819,7 +2632,7 @@ with tab_topsis:
             st.plotly_chart(fig_se, use_container_width=True)
 
     with _adv_col2:
-        st.markdown("**Cross-Efficience — Doyle & Green**")
+        st.markdown("**Cross-Efficience — Doyle & Green (1994)**")
         st.caption(
             "Chaque DMU est évalué par les poids optimaux de TOUS ses pairs. "
             "Élimine le choix arbitraire des poids. "
@@ -2893,12 +2706,12 @@ with tab_topsis:
     if st.session_state.get("se_results") is not None and st.session_state.get("ce_results") is not None:
         st.markdown("---")
         st.markdown('<p class="section-title">Tableau de Décision Consolidé — BCC · Super-Eff. · Cross-Eff. · TOPSIS</p>', unsafe_allow_html=True)
-        st.caption("Un actif robuste est performant sur les 4 dimensions.")
-        with st.expander("ℹ️ Limites de la cross-efficience — Assurance Regions"):
+        st.caption("Doyle & Green (1994) · Andersen & Petersen (1993) — Un actif robuste est performant sur les 4 dimensions.")
+        with st.expander("ℹ️ Limites de la cross-efficience — Assurance Regions (Thompson et al., 1990)"):
             st.markdown(
                 """
 La cross-efficience traite les poids arbitraires **ex-post** (après optimisation).
-Les **Assurance Regions** les contraignent **ex-ante** dans le LP :
+Les **Assurance Regions** (Thompson et al., 1990) les contraignent **ex-ante** dans le LP :
 
 > Exemple : `0.10 ≤ u_satisfaction / u_RevPAR ≤ 0.50`
 
@@ -2939,6 +2752,172 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         _csv_consol = pd.DataFrame(_consol).to_csv(index=False, sep=";", decimal=",")
         st.download_button("⬇️ Exporter tableau consolidé (CSV)", data=_csv_consol.encode("utf-8-sig"),
                            file_name="deah_ranking_consolide.csv", mime="text/csv")
+
+    st.markdown("---")
+    st.markdown('<p class="section-title">Profil Compset - Grille de coherence (Exhibit 8)</p>', unsafe_allow_html=True)
+    st.caption('Valider que les DMUs sont comparables avant interpretation DEA. RGI doit rester entre 80 et 130% pour valider le compset.')
+
+    _compset_init = pd.DataFrame({
+        'Hôtel'           : dea.hotels,
+        'Nb chambres'     : [int(dea.df.loc[h, 'nb_lits']) for h in dea.hotels],
+        'Annee ouv.'      : [0]*dea.n,
+        'Dern. renov.'    : [0]*dea.n,
+        'Classement (e)'  : [3]*dea.n,
+        'Affiliation'     : ['Independant']*dea.n,
+        'Meeting (m2)'    : [0]*dea.n,
+        'Localisation'    : ['Centre-ville']*dea.n,
+        'Gestion'         : ['3rd party']*dea.n,
+    }).set_index('Hôtel')
+    if 'compset_profile' not in st.session_state or set(st.session_state.get('compset_profile', pd.DataFrame()).index) != set(dea.hotels):
+        st.session_state['compset_profile'] = _compset_init
+
+    _cs = st.data_editor(
+        st.session_state['compset_profile'], use_container_width=True,
+        column_config={
+            'Nb chambres'   : st.column_config.NumberColumn('Nb ch.', min_value=0, format='%d'),
+            'Annee ouv.'    : st.column_config.NumberColumn('Annee ouv.', min_value=1800, max_value=2030, format='%d'),
+            'Dern. renov.'  : st.column_config.NumberColumn('Dern. renov.', min_value=1800, max_value=2030, format='%d'),
+            'Classement (e)': st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
+            'Affiliation'   : st.column_config.SelectboxColumn('Affiliation', options=['Independant','Franchise','Mgmt contract','Owner-operated']),
+            'Localisation'  : st.column_config.SelectboxColumn('Localisation', options=['Centre-ville','Suburban','Airport','Resort','Route']),
+            'Gestion'       : st.column_config.SelectboxColumn('Gestion', options=['3rd party','Brand-managed','Owner-operated']),
+            'Meeting (m2)'  : st.column_config.NumberColumn('Meeting m2', min_value=0, format='%d'),
+        }, key='compset_editor',
+    )
+    st.session_state['compset_profile'] = _cs
+    _ch_vals = _cs['Nb chambres'].values
+    if _ch_vals.max() > 0 and _ch_vals.min() > 0:
+        _ratio = _ch_vals.max() / _ch_vals.min()
+        if _ratio > 3: st.warning(f'Ratio taille max/min = {_ratio:.1f}x - compset heterogene. Segmenter ou affiner.')
+        else: st.success(f'Homogeneite capacite OK : ratio max/min = {_ratio:.1f}x')
+
+    st.markdown("---")
+    kpis_def = {
+        'RevPAR (€)': (dea.df['revpar'], 'benefit'), 'Satisfaction': (dea.df['satisfaction'], 'benefit'),
+        'TO (%)': (dea.df['taux_occupation'], 'benefit'),
+        'ETP / chambre': (dea.df['nb_employes'] / dea.df['nb_lits'], 'cost'),
+        'CPOR (k€/ch)': (dea.df['couts_op_ex'] / dea.df['nb_lits'], 'cost'),
+        'Score BCC': (pd.Series(dea.bcc_scores), 'benefit'),
+    }
+    q_stats = []
+    for kpi_name, (series, direction) in kpis_def.items():
+        s = series.dropna()
+        q_stats.append({'KPI': kpi_name, 'Direction': '↑ max' if direction=='benefit' else '↓ min',
+                        'Min': round(s.min(),2), 'P25': round(s.quantile(0.25),2),
+                        'Médiane': round(s.median(),2), 'P75': round(s.quantile(0.75),2),
+                        'Max': round(s.max(),2), 'Moy.': round(s.mean(),2)})
+    _q_stats_df = pd.DataFrame(q_stats)
+    st.dataframe(_q_stats_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        "⬇️ Télécharger quartiles KPIs (CSV)", data=_q_stats_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
+        file_name=f"deah_quartiles_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+        key='dl_quartiles',
+    )
+
+    selected_bm = st.selectbox("Hôtel à positionner", dea.hotels, key='bm_hotel')
+    pos_rows = []
+    for kpi_name, (series, direction) in kpis_def.items():
+        s = series.dropna()
+        val = float(series.loc[selected_bm]) if selected_bm in series.index else None
+        if val is None: continue
+        q25, q50, q75 = s.quantile(0.25), s.median(), s.quantile(0.75)
+        if direction == 'benefit':
+            pos = ('🟢 Top 25%' if val >= q75 else '🟡 Q3 (50-75%)' if val >= q50
+                   else '🟠 Q2 (25-50%)' if val >= q25 else '🔴 Bottom 25%')
+        else:
+            pos = ('🟢 Top 25%' if val <= q25 else '🟡 Q3 (50-75%)' if val <= q50
+                   else '🟠 Q2 (25-50%)' if val <= q75 else '🔴 Bottom 25%')
+        pos_rows.append({'KPI': kpi_name, 'Valeur': round(val,2), 'P25': round(q25,2),
+                         'Médiane': round(q50,2), 'P75': round(q75,2), 'Position': pos})
+    _pos_df = pd.DataFrame(pos_rows)
+    st.dataframe(_pos_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        f"⬇️ Télécharger positionnement {selected_bm} (CSV)",
+        data=_pos_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
+        file_name=f"deah_position_{selected_bm}_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+        key='dl_position',
+    )
+
+    st.markdown("---")
+    st.markdown('<p class="section-title">🎯 TOPSIS Composite — Score Pi</p>', unsafe_allow_html=True)
+    st.caption("Pondération hybride Shannon entropy (α=0.6) — calculé en Tab 1 (Rapport Board). Voir Tab 1 pour l'export CSV complet.")
+
+    # Réutiliser le Score Pi calculé en Tab 1 si disponible
+    _pi_cached = st.session_state.get('score_pi_df', None)
+    if _pi_cached is not None:
+        Pi = np.array([_pi_cached.loc[_pi_cached['Hôtel']==h, 'Score Pi'].values[0]
+                       if h in _pi_cached['Hôtel'].values else 0.0
+                       for h in dea.hotels])
+    else:
+        # Recalcul si Tab 1 non encore visité
+        bcc_s = pd.Series(dea.bcc_scores); etp_r = dea.df['nb_employes'] / dea.df['nb_lits']
+        cpor  = dea.df['couts_op_ex'] / dea.df['nb_lits']
+        dm = pd.DataFrame({
+            'DEA BCC': bcc_s, 'RevPAR': dea.df['revpar'], 'Satisfaction': dea.df['satisfaction'],
+            'TO%': dea.df['taux_occupation'],
+            'ETP_inv': (1 / etp_r).replace([np.inf], 0), 'CPOR_inv': (1 / cpor).replace([np.inf], 0),
+        }, index=dea.hotels).astype(float)
+        cap_inp_tab10 = st.session_state.get('capital_input', None)
+        if cap_inp_tab10 is not None and 'gop (k€)' in cap_inp_tab10.columns:
+            # RevPAR intègre déjà l'occupation — pas de double comptage
+            rev_est = dea.df['revpar'] * 365 * dea.df['nb_lits']
+            gop_vals = cap_inp_tab10['gop (k€)'].astype(float) * 1000
+            dm['GOP Margin'] = (gop_vals / rev_est.replace(0, np.nan)).fillna(0)
+        crit_labels = list(dm.columns); X = dm.values.astype(float); n_dmu, n_crit = X.shape
+        Xn = np.zeros_like(X)
+        for j in range(n_crit):
+            xmin, xmax = X[:,j].min(), X[:,j].max()
+            Xn[:,j] = (X[:,j]-xmin)/(xmax-xmin) if xmax > xmin else 0.5
+        ej = np.zeros(n_crit)
+        for j in range(n_crit):
+            col = Xn[:,j]; s = col.sum()
+            if s > 0:
+                p = col / s
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    lp = np.where(p>0, np.log(p), 0)
+                ej[j] = -np.sum(p*lp) / np.log(n_dmu) if n_dmu > 1 else 0
+        alpha = 0.6; dj = 1 - ej
+        w = (1-alpha)*(dj/dj.sum() if dj.sum()>0 else np.ones(n_crit)/n_crit) + alpha*(np.ones(n_crit)/n_crit)
+        V = Xn * w; V_plus = V.max(axis=0); V_minus = V.min(axis=0)
+        S_plus = np.sqrt(((V-V_plus)**2).sum(axis=1)); S_minus = np.sqrt(((V-V_minus)**2).sum(axis=1))
+        Pi = S_minus / (S_plus + S_minus + 1e-10)
+    q25t, q50t, q75t = np.percentile(Pi, [25,50,75])
+    def _rgi_for(h):
+        """RGI depuis le tableau par hôtel (str_benchmarks) — None si référence absente."""
+        try:
+            _ref = float(st.session_state['str_benchmarks'].loc[h, 'RevPAR marché (€)'])
+            _rvp = float(dea.df.loc[h, 'revpar'])
+            return round(_rvp / _ref * 100, 1) if _ref > 0 else None
+        except Exception:
+            return None
+
+    topsis_bm_rows = [{'Rang': 0, 'Hôtel': hotel, 'Score Pi': round(Pi[i], 4),
+                       'DEA BCC': f"{dea.bcc_scores.get(hotel,0):.1%}",
+                       'RGI': _rgi_for(hotel) or '—',
+                       'Quartile': ('Q4 — Top 25%' if Pi[i]>=q75t else 'Q3' if Pi[i]>=q50t
+                                    else 'Q2' if Pi[i]>=q25t else 'Q1 — Bottom 25%')}
+                      for i, hotel in enumerate(dea.hotels)]
+    topsis_bm_df = (pd.DataFrame(topsis_bm_rows).sort_values('Score Pi', ascending=False).reset_index(drop=True))
+    topsis_bm_df['Rang'] = range(1, len(topsis_bm_df)+1)
+    col_x, col_y = st.columns([2,1])
+    with col_x:
+        st.dataframe(topsis_bm_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Télécharger TOPSIS composite (CSV)",
+            data=topsis_bm_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
+            file_name=f"deah_topsis_composite_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
+            key='dl_topsis_bm',
+        )
+    with col_y:
+        st.markdown("**Poids des critères**")
+        _pi_crits = st.session_state.get('score_pi_crits', None)
+        _pi_w     = st.session_state.get('score_pi_w', None)
+        if _pi_crits and _pi_w:
+            st.dataframe(pd.DataFrame({'Critère': _pi_crits, 'Poids': [f"{v:.1%}" for v in _pi_w]}),
+                         use_container_width=True, hide_index=True)
+        else:
+            st.caption("Visitez d'abord Tab 1 (Rapport Board) pour calculer et afficher les poids.")
+
 
 
 # ══════════════════════════════════════════════
@@ -2999,6 +2978,8 @@ la réponse ne changera pas le diagnostic. Le score sera différent, la prescrip
 |---|---|---|
 | TGR faible | Segment structurellement défavorable | Cession · Repositionnement · Extension |
 | TGR élevé | Bon segment, problème d'échelle conjoncturel | Croissance · Mix produit |
+
+Réf. : Assaf, Barros & Josiassen (2010) — metafrontière GTE/MTE/TGR.
                 """
             )
     with col2:
@@ -3215,7 +3196,7 @@ with tab_fiche:
 
     # ── SBM — Analyse non-radiale Fiche Actif ────────────────────────────────
     st.markdown("---")
-    st.markdown('<p class="section-title">📐 SBM — Analyse non-radiale</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">📐 SBM — Analyse non-radiale (Tone 2001)</p>', unsafe_allow_html=True)
     st.caption(
         "SBM mesure l'inefficience via les slacks directement — sans contraction radiale. "
         "Recommandé pour les actifs avec données non-positives (GOP < 0, RevPAR nul). "
@@ -3306,16 +3287,17 @@ with tab_fiche:
         if _has_neg:
             st.info(
                 "🔢 Données non-positives détectées sur cet actif — "
-                "le score SBM est calculé via range normalization "
-                "et reste valide. Le score BCC a également bénéficié de la translation invariance Pastor."
+                "le score SBM est calculé via range normalization (Tone & Tsutsui 2010) "
+                "et reste valide. Le score BCC a également bénéficié de la translation invariance Pastor (1996)."
             )
 
+    # ── Plan B — Inputs non-discrétionnaires (Banker & Morey 1986) ──────────
     st.markdown("---")
     st.markdown('<p class="section-title">🔒 Plan B — Variables structurellement fixes</p>', unsafe_allow_html=True)
     st.caption(
         "Certains inputs ne peuvent pas être réduits à court terme (nb_lits, surface, CAPEX). "
         "Verrouillez-les : le modèle recalcule les cibles de rattrapage sur les variables "
-        "discrétionnaires restantes."
+        "discrétionnaires restantes. Réf. : Banker & Morey (1986) Management Science."
     )
 
     _nd_fixed = st.multiselect(
@@ -3433,12 +3415,14 @@ with tab_fiche:
 
     # ══════════════════════════════════════════════════════════════════════════
     # SIMULATEUR WHAT-IF — Recalcul DEA réel (Option B + C)
+    # Réf. : Charnes et al. (1978), Banker et al. (1984)
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown('<p class="section-title">🔬 Simulateur What-If — Impact sur le Score BCC</p>', unsafe_allow_html=True)
     st.caption(
         "Modifiez les paramètres de l'hôtel et recalculez son score BCC réel (recalcul DEA complet, "
-        "pas d'interpolation). La frontière d'efficience est recalculée sur l'ensemble du compset modifié."
+        "pas d'interpolation). La frontière d'efficience est recalculée sur l'ensemble du compset modifié. "
+        "Réf. : Charnes, Cooper & Rhodes (1978), Banker, Charnes & Cooper (1984)."
     )
 
     _wi_raw  = dea.df.loc[selected]
@@ -3554,7 +3538,7 @@ with tab_fiche:
             type="primary",
             disabled=not _changed,
             help="Relance le calcul DEA complet avec les paramètres modifiés. "
-                 "Recalcul réel, pas d'interpolation."
+                 "Recalcul réel, pas d'interpolation — Charnes et al. (1978)."
         )
 
     if _wi_run or st.session_state.get("wi_last_result") and not _changed:
@@ -3632,7 +3616,7 @@ with tab_fiche:
                     f"<div style='font-size:1.1rem;color:{_color};margin-top:4px;'>"
                     f"Δ = {_delta:+.1%} ({_delta*100:+.1f} pts)</div>"
                     f"<div style='font-size:0.8rem;color:#555;margin-top:6px;'>"
-                    f"Recalcul DEA réel · BCC</div>"
+                    f"Recalcul DEA réel · Charnes et al. (1978) BCC</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -3649,8 +3633,9 @@ with tab_fiche:
                 st.info(f"➡️ **Impact limité** ({_delta:+.1%}) — les modifications ont peu d'effet sur le score BCC. L'inefficience vient d'autres leviers.")
 
     st.caption(
+        "📚 *Réf. : Charnes, Cooper & Rhodes (1978) CCR · Banker, Charnes & Cooper (1984) BCC · "
         "Recalcul LP réel via PuLP/CBC — pas d'interpolation. "
-        "Résultat valide uniquement pour l'hôtel sélectionné, frontière définie par le compset inchangé."
+        "Résultat valide uniquement pour l'hôtel sélectionné, frontière définie par le compset inchangé.*"
     )
 
 # ══════════════════════════════════════════════
@@ -3674,7 +3659,7 @@ with tab_meta:
             if _sil is not None:
                 _sil_label = 'excellent' if _sil > 0.7 else ('bon' if _sil > 0.5 else ('moyen' if _sil > 0.3 else 'faible'))
                 st.metric('Silhouette Score (k=4)', f'{_sil:.3f}',
-                          help='Rousseeuw. >0.7=excellent | 0.5-0.7=bon | 0.3-0.5=moyen | <0.3=faible — remettre k en question')
+                          help='Rousseeuw (1987). >0.7=excellent | 0.5-0.7=bon | 0.3-0.5=moyen | <0.3=faible — remettre k en question')
                 st.caption(f'Qualité clustering : **{_sil_label}**')
         with _sil_col2:
             if _inertias:
@@ -3732,7 +3717,7 @@ with tab_meta:
 
     st.markdown('<p class="section-title">🌐 Metafrontière — Analyse GTE / MTE / TGR</p>', unsafe_allow_html=True)
     st.info("""
-**Principe :**
+**Principe (Assaf et al., 2010) :**
 - **GTE** — efficience relative au meilleur modèle opératoire de son groupe (pairs du même segment)
 - **MTE** — efficience relative au meilleur modèle opératoire observé dans tout le compset
 - **TGR** (MTE/GTE) — écart entre le modèle opératoire du groupe et le meilleur modèle connu
@@ -3743,7 +3728,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     st.caption(
         "**Recommandation méthodologique :** si votre portefeuille mélange des catégories "
         "(urban/resort, 3★/5★), utilisez la segmentation ci-dessous pour corriger le biais "
-        "inter-groupes. Si votre compset est homogène, tous les hôtels "
+        "inter-groupes (Assaf et al. 2010). Si votre compset est homogène, tous les hôtels "
         "appartiennent au même groupe — GTE = MTE pour tous, sans impact sur les scores."
     )
     seg_options = {'🏠 Taille (auto depuis nb_lits)': 'taille'}
@@ -3755,7 +3740,8 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     seg_label = st.selectbox(
         "Dimension de segmentation",
         options=list(seg_options.keys()),
-        help="Choisir la dimension qui définit les groupes homogènes dans votre compset."
+        help="Choisir la dimension qui définit les groupes homogènes dans votre compset. "
+             "Réf. : Assaf, Barros & Josiassen (2010) — metafrontière bootstrappée."
     )
     seg_key = seg_options[seg_label]
     groups = dea.get_auto_size_groups() if seg_key == 'taille' else dea.df[seg_key].rename('groupe')
@@ -3819,15 +3805,17 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     st.info(
         "💡 **Peers restreints au segment pertinent via GTE** — la frontière intra-groupe "
         "garantit que chaque hôtel est évalué contre ses vrais comparables (même segment). "
-        "Restreindre manuellement les peers est redondant avec cette mécanique.",
+        "Restreindre manuellement les peers est redondant avec cette mécanique. "
+        "Réf. : Assaf, Barros & Josiassen (2010) Table 3.",
     )
 
+    # ── ANOVA second stage (Poldrugovac 2016 ; Assaf 2009) ────────────────────────
     st.markdown("---")
     st.markdown('<p class="section-title">ANOVA Second Stage -- Differences efficience entre groupes</p>', unsafe_allow_html=True)
-    st.caption('Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
+    st.caption('Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
 
     try:
-        # Mann-Whitney + ANOVA classique
+        # Mann-Whitney (Yu 2012) + ANOVA classique
         _mw_res = mann_whitney_groups(dea, groups)
         if 'error' not in _mw_res:
             col_a1, col_a2 = st.columns([3, 1])
@@ -3842,7 +3830,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
                 st.caption(_mw_res['test'])
             st.info('*** p<0.01  ** p<0.05  * p<0.10  ns = non significatif. '
                     'Test non-paramétrique recommandé pour scores DEA censurés en 1.0 '
-                    '.')
+                    '(Simar & Wilson 2007 ; Yu 2012).')
         else:
             _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
             st.dataframe(_anova_summ, use_container_width=True, hide_index=True)
@@ -3850,9 +3838,10 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     except Exception as _e:
         st.info(f"ANOVA non disponible : {_e}")
 
+    # ── Bootstrap Metafrontière (Assaf 2009 ; Simar & Wilson 2007) ─────────────
     st.markdown("---")
     st.markdown('<p class="section-title">Bootstrap Metafrontière — Intervalles de confiance IC 95%</p>', unsafe_allow_html=True)
-    st.caption("2000 itérations dans le papier original. Ici 200 itérations pour performance. IC 95% sur GTE, MTE, TGR.")
+    st.caption("Assaf, Barros & Josiassen (2009) ; Simar & Wilson (2007) — 2000 itérations dans le papier original. Ici 200 itérations pour performance. IC 95% sur GTE, MTE, TGR.")
 
     _n_boot = st.slider("Nombre d'itérations bootstrap", min_value=50, max_value=500, value=100, step=50, key="meta_bootstrap_n")
     if st.button("🔄 Lancer Bootstrap Metafrontière", key="meta_boot_btn"):
@@ -3873,9 +3862,10 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
         st.dataframe(_bdf[_boot_cols_avail].sort_values('TGR'), use_container_width=True, hide_index=True)
         st.caption("IC bas / IC haut = quantiles 2.5% et 97.5% des scores bootstrap. Un IC large indique une incertitude statistique élevée sur le score.")
 
+    # ── KPIs enrichis — Market share + Guests/ETP (Assaf 2009) ───────────
     st.markdown("---")
     st.markdown('<p class="section-title">KPIs Enrichis — Market Share & Productivité du Travail</p>', unsafe_allow_html=True)
-    st.caption("Market share intra-compset | Guests/ETP = nb nuitées / ETP (productivité travail).")
+    st.caption("Assaf et al. (2009) Table 2 — Market share intra-compset | Guests/ETP = nb nuitées / ETP (productivité travail).")
 
     _enr_df = dea.compute_enriched_kpis()
     st.dataframe(_enr_df, use_container_width=True, hide_index=True)
@@ -3893,7 +3883,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
             marker=dict(size=10, color=_color), showlegend=False,
         ))
     fig_ms.update_layout(
-        title="Market Share intra-compset vs Efficience BCC",
+        title="Market Share intra-compset vs Efficience BCC (Assaf et al. 2009)",
         xaxis=dict(title="Market Share (%)"),
         yaxis=dict(title="Score BCC", tickformat='.0%', range=[0.3, 1.08]),
         height=400, paper_bgcolor='rgba(0,0,0,0)',
@@ -4107,7 +4097,7 @@ with tab_capital:
             capex_ch = round(capex_ke * 1000 / lits, 0)  if lits > 0    else None
             # CA = RevPAR × chambres disponibles × jours.
             # Ne PAS multiplier par le taux d'occupation : RevPAR = ADR × OCC
-            # l'intègre déjà. Multiplier à nouveau
+            # l'intègre déjà (HOST/USALI ; Kimes 1989). Multiplier à nouveau
             # sous-estimait le CA d'environ 25 %.
             rev_est  = revpar * jours_exploit * lits
             rendement= round(rev_est / (capex_ke * 1000), 2) if capex_ke > 0 else None
@@ -4327,11 +4317,11 @@ with tab_capital:
                 st.info("Données capital insuffisantes pour le calcul DEA Capital (surface + CAPEX + revenus requis).")
     
     
-    # ── MDEA Room / F&B Decomposition ─────────────────────────
+    # ── MDEA Room / F&B Decomposition (Yu 2012) ─────────────────────────
     st.markdown("---")
-    st.markdown('<p class="section-title">🏨 Décomposition Room / F&B — MDEA</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">🏨 Décomposition Room / F&B — MDEA (Yu 2012)</p>', unsafe_allow_html=True)
     st.caption(
-        "Yu, M.-M. Current Issues in Tourism 15(5), 461-476. "
+        "Yu, M.-M. (2012) Current Issues in Tourism 15(5), 461-476. "
         "Décompose l'efficience globale en efficience Hébergement et efficience F&B. "
         "Localise la source d'inefficience par département. "
         "Nécessite : rooms_cost + rooms_revenue + fb_cost + fb_revenue dans le CSV."
@@ -4402,7 +4392,7 @@ with tab_capital:
             fig_rf.add_annotation(x=0.95, y=0.65, text="Room > F&B",
                                    showarrow=False, font=dict(size=9, color="#f39c12"))
             fig_rf.update_layout(
-                title="BCC Room vs BCC F&B — Localisation de l'inefficience",
+                title="BCC Room vs BCC F&B — Localisation de l'inefficience (Yu 2012)",
                 xaxis=dict(title="BCC Hébergement (Room)", range=[0.5,1.05]),
                 yaxis=dict(title="BCC Restauration (F&B)", range=[0.5,1.05]),
                 height=420, paper_bgcolor="rgba(0,0,0,0)",
@@ -4413,7 +4403,7 @@ with tab_capital:
                 "Au-dessus de la diagonale : F&B plus efficient que Hébergement. "
                 "En dessous : Hébergement plus efficient. "
                 "Sur la diagonale : performance équilibrée entre les deux divisions. "
-                "Source : Yu — l'efficience globale = moyenne pondérée Room + F&B."
+                "Source : Yu (2012) — l'efficience globale = moyenne pondérée Room + F&B."
             )
 
             # Export CSV
@@ -4524,407 +4514,7 @@ with tab_capital:
         st.dataframe(pd.DataFrame(flex_rows), use_container_width=True, hide_index=True)
         st.info('FT > 50% = bonne conversion revenus -> profit. FT < 50% = charges variables elevees. Expense Flex calcule quand CA baisse.')
 
-# ══════════════════════════════════════════════
-# TAB 10 — BENCHMARK MARCHÉ
-# ══════════════════════════════════════════════
-with tab_bmark:
-    st.markdown('<p class="section-title">📊 Benchmark Marché — STR Indices & Quartiles</p>', unsafe_allow_html=True)
-    st.caption(
-        "Chaque hôtel a sa propre référence marché (marché local × catégorie). "
-        "Importez votre fichier de benchmarks STR ou saisissez les valeurs directement dans le tableau."
-    )
-
-    # ── Import CSV / Excel de benchmarks STR ──────────────────────────────────
-    with st.expander("📂 Importer un fichier de benchmarks STR (CSV ou Excel)", expanded=False):
-        st.caption(
-            "Colonnes attendues (ordre libre) : **Hôtel** · **Marché / Ville** · **Catégorie** · "
-            "**RevPAR marché €** · **ADR marché €** · **OCC marché %**  \n"
-            "La colonne *Hôtel* doit correspondre exactement aux noms dans votre CSV DEA-H."
-        )
-        _str_upload = st.file_uploader("Fichier benchmarks STR", type=["csv", "xlsx", "xls"], key="str_bm_upload")
-        if _str_upload is not None:
-            try:
-                if _str_upload.name.endswith((".xlsx", ".xls")):
-                    _up_df = pd.read_excel(_str_upload)
-                else:
-                    # Détecter séparateur (;  ou ,)
-                    _raw = _str_upload.read().decode("utf-8-sig")
-                    _sep = ";" if _raw.count(";") > _raw.count(",") else ","
-                    import io as _io
-                    _up_df = pd.read_csv(_io.StringIO(_raw), sep=_sep)
-
-                # Normaliser noms de colonnes
-                _col_map = {
-                    'hotel': 'Hôtel', 'hôtel': 'Hôtel',
-                    'marché / ville': 'Marché / Ville', 'marche / ville': 'Marché / Ville',
-                    'marché': 'Marché / Ville', 'ville': 'Marché / Ville',
-                    'catégorie': 'Catégorie', 'categorie': 'Catégorie',
-                    'revpar marché €': 'RevPAR marché €', 'revpar marche €': 'RevPAR marché €',
-                    'revpar marché': 'RevPAR marché €', 'revpar': 'RevPAR marché €',
-                    'adr marché €': 'ADR marché €', 'adr marche €': 'ADR marché €',
-                    'adr marché': 'ADR marché €', 'adr': 'ADR marché €',
-                    'occ marché %': 'OCC marché %', 'occ marche %': 'OCC marché %',
-                    'occ marché': 'OCC marché %', 'occ': 'OCC marché %',
-                }
-                _up_df.columns = [_col_map.get(c.strip().lower(), c.strip()) for c in _up_df.columns]
-
-                if 'Hôtel' not in _up_df.columns:
-                    st.error("Colonne 'Hôtel' introuvable dans le fichier. Vérifiez l'en-tête.")
-                else:
-                    _up_df = _up_df.set_index('Hôtel')
-                    # Recalculer RevPAR si absent mais ADR + OCC présents
-                    if 'RevPAR marché €' not in _up_df.columns and 'ADR marché €' in _up_df.columns and 'OCC marché %' in _up_df.columns:
-                        _up_df['RevPAR marché €'] = (_up_df['ADR marché €'] * _up_df['OCC marché %'] / 100).round(2)
-
-                    _matched   = [h for h in dea.hotels if h in _up_df.index]
-                    _unmatched = [h for h in dea.hotels if h not in _up_df.index]
-
-                    if st.button(f"✅ Charger les benchmarks ({len(_matched)} hôtels reconnus)", key="str_bm_load"):
-                        # Initialiser base vide puis remplir les lignes reconnues
-                        _new_bm = pd.DataFrame({
-                            'Marché / Ville'   : [''] * dea.n,
-                            'Catégorie'        : ['4★'] * dea.n,
-                            'RevPAR marché (€)': [100.0] * dea.n,
-                            'ADR marché (€)'   : [0.0] * dea.n,
-                            'OCC marché (%)'   : [0.0] * dea.n,
-                        }, index=dea.hotels)
-                        for h in _matched:
-                            if 'Marché / Ville'  in _up_df.columns: _new_bm.loc[h, 'Marché / Ville']   = str(_up_df.loc[h, 'Marché / Ville'])
-                            if 'Catégorie'       in _up_df.columns: _new_bm.loc[h, 'Catégorie']        = str(_up_df.loc[h, 'Catégorie'])
-                            if 'RevPAR marché €' in _up_df.columns: _new_bm.loc[h, 'RevPAR marché (€)'] = float(_up_df.loc[h, 'RevPAR marché €'])
-                            if 'ADR marché €'    in _up_df.columns: _new_bm.loc[h, 'ADR marché (€)']   = float(_up_df.loc[h, 'ADR marché €'])
-                            if 'OCC marché %'    in _up_df.columns: _new_bm.loc[h, 'OCC marché (%)']   = float(_up_df.loc[h, 'OCC marché %'])
-                        st.session_state['str_benchmarks'] = _new_bm
-                        st.success(f"✅ {len(_matched)} hôtels chargés.")
-                        if _unmatched:
-                            st.warning(f"⚠️ {len(_unmatched)} hôtels non reconnus (noms différents du CSV DEA) : {', '.join(_unmatched)}")
-
-            except Exception as _e:
-                st.error(f"Erreur lecture fichier : {_e}")
-
-    # ── Tableau de benchmarks marché par hôtel ────────────────────────────────
-    _str_init_data = {
-        'Marché / Ville'   : [''] * dea.n,
-        'Catégorie'        : ['4★'] * dea.n,
-        'RevPAR marché (€)': [100.0] * dea.n,
-        'ADR marché (€)'   : [0.0] * dea.n,
-        'OCC marché (%)'   : [0.0] * dea.n,
-    }
-    _str_init_df = pd.DataFrame(_str_init_data, index=dea.hotels)
-    _str_init_df.index.name = 'Hôtel'
-
-    # Conserver les saisies entre rechargements
-    if ('str_benchmarks' not in st.session_state or
-            set(st.session_state['str_benchmarks'].index) != set(dea.hotels)):
-        st.session_state['str_benchmarks'] = _str_init_df
-
-    st.markdown("**Références marché par hôtel** *(éditez directement dans le tableau)*")
-    _str_bm = st.data_editor(
-        st.session_state['str_benchmarks'],
-        use_container_width=True,
-        column_config={
-            'Marché / Ville'   : st.column_config.TextColumn('Marché / Ville', help='Ex : Paris, Lyon, Resort Côte d\'Azur'),
-            'Catégorie'        : st.column_config.SelectboxColumn('Catégorie', options=['2★','3★','4★','5★','Resort','Appart-hôtel','Auberge']),
-            'RevPAR marché (€)': st.column_config.NumberColumn('RevPAR marché €', min_value=0.0, format='%.1f', help='RevPAR moyen du compset STR de cet hôtel'),
-            'ADR marché (€)'   : st.column_config.NumberColumn('ADR marché €',    min_value=0.0, format='%.1f', help='Optionnel — calcule l\'ARI'),
-            'OCC marché (%)'   : st.column_config.NumberColumn('OCC marché %',    min_value=0.0, max_value=100.0, format='%.1f', help='Optionnel — calcule le MPI'),
-        },
-        key='str_bm_editor',
-    )
-    st.session_state['str_benchmarks'] = _str_bm
-
-    st.markdown("---")
-
-    # ── Calcul des indices STR par hôtel (référence propre) ──────────────────
-    str_rows = []
-    for hotel in dea.hotels:
-        rvp      = float(dea.df.loc[hotel, 'revpar'])
-        _occ_s   = float(dea.df.loc[hotel, 'taux_occupation']) / 100
-        _adr_s   = float(dea.df.loc[hotel, 'adr']) if 'adr' in dea.df.columns else (rvp / _occ_s if _occ_s > 0 else 0.0)
-
-        mkt_rvp  = float(_str_bm.loc[hotel, 'RevPAR marché (€)']) if hotel in _str_bm.index else 0.0
-        mkt_adr  = float(_str_bm.loc[hotel, 'ADR marché (€)'])    if hotel in _str_bm.index else 0.0
-        mkt_occ  = float(_str_bm.loc[hotel, 'OCC marché (%)'])    if hotel in _str_bm.index else 0.0
-        marche   = str(_str_bm.loc[hotel, 'Marché / Ville'])      if hotel in _str_bm.index else ''
-        categorie= str(_str_bm.loc[hotel, 'Catégorie'])           if hotel in _str_bm.index else ''
-
-        rgi = round(rvp / mkt_rvp * 100, 1) if mkt_rvp > 0 else None
-        row = {
-            'Hôtel'      : hotel,
-            'Marché'     : marche,
-            'Catégorie'  : categorie,
-            'RevPAR (€)' : round(rvp, 1),
-            'Réf. marché': round(mkt_rvp, 1),
-            'RGI'        : rgi,
-            'Signal RGI' : ('🟢 Leader' if rgi and rgi >= 110 else
-                            '🟡 Dans le marché' if rgi and rgi >= 90 else
-                            '🔴 Sous le marché') if rgi else '—',
-        }
-        occ_pct = float(dea.df.loc[hotel, 'taux_occupation'])
-        row['OCC (%)'] = round(occ_pct, 1)
-        if mkt_occ > 0:
-            row['MPI'] = round(occ_pct / mkt_occ * 100, 1)
-            row['Signal MPI'] = ('🟢 Leader' if row['MPI'] >= 110 else '🟡 Marché' if row['MPI'] >= 90 else '🔴 Sous')
-        row['ADR (€)'] = round(_adr_s, 1)
-        if mkt_adr > 0 and _adr_s > 0:
-            row['ARI'] = round(_adr_s / mkt_adr * 100, 1)
-            row['Signal ARI'] = ('🟢 Leader' if row['ARI'] >= 110 else '🟡 Marché' if row['ARI'] >= 90 else '🔴 Sous')
-        str_rows.append(row)
-
-    str_df = pd.DataFrame(str_rows)
-    _str_has_rgi = str_df['RGI'].notna().any()
-    if _str_has_rgi:
-        str_df = str_df.sort_values('RGI', ascending=False)
-
-    st.markdown("**Résultats indices STR par hôtel**")
-    st.dataframe(str_df, use_container_width=True, hide_index=True)
-    st.download_button(
-        "⬇️ Télécharger indices STR (CSV)", data=str_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
-        file_name=f"deah_str_indices_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
-        key='dl_str_indices',
-    )
-
-    # ── Graphique RGI — coloré par catégorie ─────────────────────────────────
-    if _str_has_rgi:
-        _rgi_plot = str_df.dropna(subset=['RGI']).copy()
-        _cat_colors = {'2★':'#95a5a6','3★':'#3498db','4★':'#1a5276','5★':'#d4ac0d',
-                       'Resort':'#27ae60','Appart-hôtel':'#8e44ad','Auberge':'#e67e22'}
-        _bar_colors = [_cat_colors.get(c, '#1c2b5e') for c in _rgi_plot['Catégorie']]
-        fig_rgi = go.Figure(go.Bar(
-            x=_rgi_plot['RGI'], y=_rgi_plot['Hôtel'], orientation='h',
-            marker=dict(color=_bar_colors),
-            text=[f"{v:.0f} | {m}" for v, m in zip(_rgi_plot['RGI'], _rgi_plot['Marché'])],
-            textposition='outside',
-            customdata=_rgi_plot[['Catégorie','Marché']].values,
-            hovertemplate='<b>%{y}</b><br>RGI : %{x}<br>Catégorie : %{customdata[0]}<br>Marché : %{customdata[1]}<extra></extra>',
-        ))
-        fig_rgi.add_vline(x=100, line_dash='dash', line_color='gray', annotation_text="Fair share = 100")
-        fig_rgi.add_vline(x=110, line_dash='dot',  line_color='green', annotation_text="Leader +10%")
-        fig_rgi.add_vline(x=90,  line_dash='dot',  line_color='orange', annotation_text="Seuil −10%")
-        _rgi_max = _rgi_plot['RGI'].max()
-        fig_rgi.update_layout(
-            title="RevPAR Generation Index (RGI) — référence marché propre à chaque hôtel",
-            xaxis=dict(title="RGI", range=[50, max(_rgi_max * 1.18, 130)]),
-            height=max(380, len(_rgi_plot) * 32),
-            paper_bgcolor='rgba(0,0,0,0)', showlegend=False,
-        )
-        st.plotly_chart(fig_rgi, use_container_width=True)
-
-        # ── Graphiques MPI / ARI si disponibles ──────────────────────────────
-        str_idx_charts = [(col, ttl) for col, ttl in [
-            ('MPI', 'MPI — Market Penetration Index (Occupation)'),
-            ('ARI', 'ARI — Average Rate Index (Tarif)'),
-        ] if col in str_df.columns]
-
-        if str_idx_charts:
-            idx_c = st.columns(len(str_idx_charts))
-            for ci, (icol, ititle) in enumerate(str_idx_charts):
-                sub_i = str_df.dropna(subset=[icol]).sort_values(icol)
-                if sub_i.empty: continue
-                _bc = [_cat_colors.get(c, '#1c2b5e') for c in sub_i['Catégorie']]
-                fig_i = go.Figure(go.Bar(
-                    x=sub_i[icol], y=sub_i['Hôtel'], orientation='h',
-                    marker=dict(color=_bc),
-                    text=[f"{v:.0f}" for v in sub_i[icol]], textposition='outside',
-                ))
-                fig_i.add_vline(x=100, line_dash='dash', line_color='gray')
-                fig_i.update_layout(title=ititle, xaxis=dict(range=[50, sub_i[icol].max()*1.18]),
-                                    height=max(280, len(sub_i)*30), paper_bgcolor='rgba(0,0,0,0)')
-                idx_c[ci].plotly_chart(fig_i, use_container_width=True)
-
-        # ── Vue consolidée par marché ─────────────────────────────────────────
-        _str_has_marche = str_df['Marché'].str.strip().ne('').any()
-        if _str_has_marche:
-            st.markdown("---")
-            st.markdown("**Synthèse par marché** — moyenne des indices RGI par marché/catégorie")
-            _mkt_grp = str_df[str_df['RGI'].notna()].groupby(['Marché', 'Catégorie']).agg(
-                Nb_hotels=('Hôtel', 'count'),
-                RGI_moyen=('RGI', 'mean'),
-                RevPAR_moyen=('RevPAR (€)', 'mean'),
-            ).round(1).reset_index()
-            _mkt_grp.columns = ['Marché','Catégorie','Nb hôtels','RGI moyen','RevPAR moyen (€)']
-            _mkt_grp['Signal'] = _mkt_grp['RGI moyen'].apply(
-                lambda r: '🟢 Leader' if r >= 110 else '🟡 Dans le marché' if r >= 90 else '🔴 Sous le marché'
-            )
-            st.dataframe(_mkt_grp.sort_values('RGI moyen', ascending=False),
-                         use_container_width=True, hide_index=True)
-
-        st.info(
-            'RGI = RevPAR hôtel / RevPAR marché × 100  |  MPI = OCC hôtel / OCC marché × 100  |  '
-            'ARI = ADR hôtel / ADR marché × 100  |  '
-            'Seuil leader ≥ 110  |  Seuil alerte ≤ 80 ou ≥ 130 → revalider compset '
-            '(Russo & Legel, Exhibit 9)'
-        )
-    else:
-        st.info("Renseignez les références marché dans le tableau ci-dessus pour afficher les indices RGI/MPI/ARI.")
-
-    # Profil Compset (Exhibit 8)
-    st.markdown('---')
-    st.markdown('<p class="section-title">Profil Compset - Grille de coherence (Exhibit 8)</p>', unsafe_allow_html=True)
-    st.caption('Valider que les DMUs sont comparables avant interpretation DEA. RGI doit rester entre 80 et 130% pour valider le compset.')
-
-    _compset_init = pd.DataFrame({
-        'Hôtel'           : dea.hotels,
-        'Nb chambres'     : [int(dea.df.loc[h, 'nb_lits']) for h in dea.hotels],
-        'Annee ouv.'      : [0]*dea.n,
-        'Dern. renov.'    : [0]*dea.n,
-        'Classement (e)'  : [3]*dea.n,
-        'Affiliation'     : ['Independant']*dea.n,
-        'Meeting (m2)'    : [0]*dea.n,
-        'Localisation'    : ['Centre-ville']*dea.n,
-        'Gestion'         : ['3rd party']*dea.n,
-    }).set_index('Hôtel')
-    if 'compset_profile' not in st.session_state or set(st.session_state.get('compset_profile', pd.DataFrame()).index) != set(dea.hotels):
-        st.session_state['compset_profile'] = _compset_init
-
-    _cs = st.data_editor(
-        st.session_state['compset_profile'], use_container_width=True,
-        column_config={
-            'Nb chambres'   : st.column_config.NumberColumn('Nb ch.', min_value=0, format='%d'),
-            'Annee ouv.'    : st.column_config.NumberColumn('Annee ouv.', min_value=1800, max_value=2030, format='%d'),
-            'Dern. renov.'  : st.column_config.NumberColumn('Dern. renov.', min_value=1800, max_value=2030, format='%d'),
-            'Classement (e)': st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
-            'Affiliation'   : st.column_config.SelectboxColumn('Affiliation', options=['Independant','Franchise','Mgmt contract','Owner-operated']),
-            'Localisation'  : st.column_config.SelectboxColumn('Localisation', options=['Centre-ville','Suburban','Airport','Resort','Route']),
-            'Gestion'       : st.column_config.SelectboxColumn('Gestion', options=['3rd party','Brand-managed','Owner-operated']),
-            'Meeting (m2)'  : st.column_config.NumberColumn('Meeting m2', min_value=0, format='%d'),
-        }, key='compset_editor',
-    )
-    st.session_state['compset_profile'] = _cs
-    _ch_vals = _cs['Nb chambres'].values
-    if _ch_vals.max() > 0 and _ch_vals.min() > 0:
-        _ratio = _ch_vals.max() / _ch_vals.min()
-        if _ratio > 3: st.warning(f'Ratio taille max/min = {_ratio:.1f}x - compset heterogene. Segmenter ou affiner.')
-        else: st.success(f'Homogeneite capacite OK : ratio max/min = {_ratio:.1f}x')
-
-    st.markdown("---")
-    kpis_def = {
-        'RevPAR (€)': (dea.df['revpar'], 'benefit'), 'Satisfaction': (dea.df['satisfaction'], 'benefit'),
-        'TO (%)': (dea.df['taux_occupation'], 'benefit'),
-        'ETP / chambre': (dea.df['nb_employes'] / dea.df['nb_lits'], 'cost'),
-        'CPOR (k€/ch)': (dea.df['couts_op_ex'] / dea.df['nb_lits'], 'cost'),
-        'Score BCC': (pd.Series(dea.bcc_scores), 'benefit'),
-    }
-    q_stats = []
-    for kpi_name, (series, direction) in kpis_def.items():
-        s = series.dropna()
-        q_stats.append({'KPI': kpi_name, 'Direction': '↑ max' if direction=='benefit' else '↓ min',
-                        'Min': round(s.min(),2), 'P25': round(s.quantile(0.25),2),
-                        'Médiane': round(s.median(),2), 'P75': round(s.quantile(0.75),2),
-                        'Max': round(s.max(),2), 'Moy.': round(s.mean(),2)})
-    _q_stats_df = pd.DataFrame(q_stats)
-    st.dataframe(_q_stats_df, use_container_width=True, hide_index=True)
-    st.download_button(
-        "⬇️ Télécharger quartiles KPIs (CSV)", data=_q_stats_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
-        file_name=f"deah_quartiles_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
-        key='dl_quartiles',
-    )
-
-    selected_bm = st.selectbox("Hôtel à positionner", dea.hotels, key='bm_hotel')
-    pos_rows = []
-    for kpi_name, (series, direction) in kpis_def.items():
-        s = series.dropna()
-        val = float(series.loc[selected_bm]) if selected_bm in series.index else None
-        if val is None: continue
-        q25, q50, q75 = s.quantile(0.25), s.median(), s.quantile(0.75)
-        if direction == 'benefit':
-            pos = ('🟢 Top 25%' if val >= q75 else '🟡 Q3 (50-75%)' if val >= q50
-                   else '🟠 Q2 (25-50%)' if val >= q25 else '🔴 Bottom 25%')
-        else:
-            pos = ('🟢 Top 25%' if val <= q25 else '🟡 Q3 (50-75%)' if val <= q50
-                   else '🟠 Q2 (25-50%)' if val <= q75 else '🔴 Bottom 25%')
-        pos_rows.append({'KPI': kpi_name, 'Valeur': round(val,2), 'P25': round(q25,2),
-                         'Médiane': round(q50,2), 'P75': round(q75,2), 'Position': pos})
-    _pos_df = pd.DataFrame(pos_rows)
-    st.dataframe(_pos_df, use_container_width=True, hide_index=True)
-    st.download_button(
-        f"⬇️ Télécharger positionnement {selected_bm} (CSV)",
-        data=_pos_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
-        file_name=f"deah_position_{selected_bm}_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
-        key='dl_position',
-    )
-
-    st.markdown("---")
-    st.markdown('<p class="section-title">🎯 TOPSIS Composite — Score Pi</p>', unsafe_allow_html=True)
-    st.caption("Pondération hybride Shannon entropy (α=0.6) — calculé en Tab 1 (Rapport Board). Voir Tab 1 pour l'export CSV complet.")
-
-    # Réutiliser le Score Pi calculé en Tab 1 si disponible
-    _pi_cached = st.session_state.get('score_pi_df', None)
-    if _pi_cached is not None:
-        Pi = np.array([_pi_cached.loc[_pi_cached['Hôtel']==h, 'Score Pi'].values[0]
-                       if h in _pi_cached['Hôtel'].values else 0.0
-                       for h in dea.hotels])
-    else:
-        # Recalcul si Tab 1 non encore visité
-        bcc_s = pd.Series(dea.bcc_scores); etp_r = dea.df['nb_employes'] / dea.df['nb_lits']
-        cpor  = dea.df['couts_op_ex'] / dea.df['nb_lits']
-        dm = pd.DataFrame({
-            'DEA BCC': bcc_s, 'RevPAR': dea.df['revpar'], 'Satisfaction': dea.df['satisfaction'],
-            'TO%': dea.df['taux_occupation'],
-            'ETP_inv': (1 / etp_r).replace([np.inf], 0), 'CPOR_inv': (1 / cpor).replace([np.inf], 0),
-        }, index=dea.hotels).astype(float)
-        cap_inp_tab10 = st.session_state.get('capital_input', None)
-        if cap_inp_tab10 is not None and 'gop (k€)' in cap_inp_tab10.columns:
-            # RevPAR intègre déjà l'occupation — pas de double comptage
-            rev_est = dea.df['revpar'] * 365 * dea.df['nb_lits']
-            gop_vals = cap_inp_tab10['gop (k€)'].astype(float) * 1000
-            dm['GOP Margin'] = (gop_vals / rev_est.replace(0, np.nan)).fillna(0)
-        crit_labels = list(dm.columns); X = dm.values.astype(float); n_dmu, n_crit = X.shape
-        Xn = np.zeros_like(X)
-        for j in range(n_crit):
-            xmin, xmax = X[:,j].min(), X[:,j].max()
-            Xn[:,j] = (X[:,j]-xmin)/(xmax-xmin) if xmax > xmin else 0.5
-        ej = np.zeros(n_crit)
-        for j in range(n_crit):
-            col = Xn[:,j]; s = col.sum()
-            if s > 0:
-                p = col / s
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    lp = np.where(p>0, np.log(p), 0)
-                ej[j] = -np.sum(p*lp) / np.log(n_dmu) if n_dmu > 1 else 0
-        alpha = 0.6; dj = 1 - ej
-        w = (1-alpha)*(dj/dj.sum() if dj.sum()>0 else np.ones(n_crit)/n_crit) + alpha*(np.ones(n_crit)/n_crit)
-        V = Xn * w; V_plus = V.max(axis=0); V_minus = V.min(axis=0)
-        S_plus = np.sqrt(((V-V_plus)**2).sum(axis=1)); S_minus = np.sqrt(((V-V_minus)**2).sum(axis=1))
-        Pi = S_minus / (S_plus + S_minus + 1e-10)
-    q25t, q50t, q75t = np.percentile(Pi, [25,50,75])
-    def _rgi_for(h):
-        """RGI depuis le tableau par hôtel (str_benchmarks) — None si référence absente."""
-        try:
-            _ref = float(st.session_state['str_benchmarks'].loc[h, 'RevPAR marché (€)'])
-            _rvp = float(dea.df.loc[h, 'revpar'])
-            return round(_rvp / _ref * 100, 1) if _ref > 0 else None
-        except Exception:
-            return None
-
-    topsis_bm_rows = [{'Rang': 0, 'Hôtel': hotel, 'Score Pi': round(Pi[i], 4),
-                       'DEA BCC': f"{dea.bcc_scores.get(hotel,0):.1%}",
-                       'RGI': _rgi_for(hotel) or '—',
-                       'Quartile': ('Q4 — Top 25%' if Pi[i]>=q75t else 'Q3' if Pi[i]>=q50t
-                                    else 'Q2' if Pi[i]>=q25t else 'Q1 — Bottom 25%')}
-                      for i, hotel in enumerate(dea.hotels)]
-    topsis_bm_df = (pd.DataFrame(topsis_bm_rows).sort_values('Score Pi', ascending=False).reset_index(drop=True))
-    topsis_bm_df['Rang'] = range(1, len(topsis_bm_df)+1)
-    col_x, col_y = st.columns([2,1])
-    with col_x:
-        st.dataframe(topsis_bm_df, use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇️ Télécharger TOPSIS composite (CSV)",
-            data=topsis_bm_df.to_csv(index=False, sep=';', encoding='utf-8-sig'),
-            file_name=f"deah_topsis_composite_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv",
-            key='dl_topsis_bm',
-        )
-    with col_y:
-        st.markdown("**Poids des critères**")
-        _pi_crits = st.session_state.get('score_pi_crits', None)
-        _pi_w     = st.session_state.get('score_pi_w', None)
-        if _pi_crits and _pi_w:
-            st.dataframe(pd.DataFrame({'Critère': _pi_crits, 'Poids': [f"{v:.1%}" for v in _pi_w]}),
-                         use_container_width=True, hide_index=True)
-        else:
-            st.caption("Visitez d'abord Tab 1 (Rapport Board) pour calculer et afficher les poids.")
-
-# TAB 11 — MALMQUIST & TOBIT
+# TAB 10 — MALMQUIST & TOBIT
 # ══════════════════════════════════════════════
 with tab_malm:
     st.markdown('<p class="section-title">📈 Malmquist Productivity Index — Évolution temporelle</p>', unsafe_allow_html=True)
@@ -4955,7 +4545,8 @@ with tab_malm:
         with st.expander("⚙️ Correction inflation (optionnel — recommandé)"):
             st.caption(
                 "L'inflation sur les charges op' et le RevPAR peut simuler un Frontier Shift "
-                "artificiel. Renseignez le taux d'inflation entre N-1 et N pour corriger."
+                "artificiel. Renseignez le taux d'inflation entre N-1 et N pour corriger. "
+                "Réf. : Färe, Grosskopf, Norris & Zhang (1994)."
             )
             _deflate_on = st.checkbox("Appliquer la correction inflation", value=False)
             _inflation_rate = st.number_input(
@@ -5141,8 +4732,9 @@ with tab_malm:
     st.markdown('---')
     st.markdown('''<p class="section-title">🧪 Stage 2 — Déterminants de l'Efficience</p>''', unsafe_allow_html=True)
     st.caption(
-        "Deux estimateurs complémentaires : Tobit censuré pour la lisibilité, "
-        "Simar-Wilson pour la robustesse statistique."
+        "Deux estimateurs complémentaires : Tobit censuré (Tobin 1958) pour la lisibilité, "
+        "Simar-Wilson (2007) pour la robustesse statistique. "
+        "Variables financières et de saisonnalité issues de Pulina & Santoni (2018)."
     )
 
     # ── Calcul variables dérivées Stage 2 ────────────────────────────────────
@@ -5155,6 +4747,7 @@ with tab_malm:
         'nb_lits'           : 'Nombre de chambres',
         'log_nb_lits'       : 'Taille — log(nb chambres)',
         'surface_m2'        : 'Surface totale (m²)',
+        # Financières — Pulina & Santoni (2018)
         'ltv_proxy'         : 'Intensité capital / CA (proxy LTV %)',
         'asset_yield'       : 'Rendement actifs CA/BV (proxy ROA)',
         'capex_per_room'    : 'CAPEX par chambre (k€)',
@@ -5258,14 +4851,14 @@ with tab_malm:
                 "chaque étoile supplémentaire améliore le score BCC de 0.08 points "
                 "toutes choses égales par ailleurs (ETP, charges, localisation inchangés). "
                 "Le Tobit corrige le biais d'estimation lié au plafond BCC=1.0 "
-                "."
+                "(Simar & Wilson 2007)."
             )
         elif st.session_state.get("tobit_results") and "error" in st.session_state["tobit_results"]:
             st.error(st.session_state["tobit_results"]["error"])
 
-    # ── SIMAR-WILSON ───────────────────────────────────────────────────
+    # ── SIMAR-WILSON (2007) ───────────────────────────────────────────────────
     st.markdown("---")
-    st.markdown('''<p class="section-title">📐 Simar-Wilson — Régression Tronquée Bootstrappée</p>''', unsafe_allow_html=True)
+    st.markdown('''<p class="section-title">📐 Simar-Wilson (2007) — Régression Tronquée Bootstrappée</p>''', unsafe_allow_html=True)
 
     with st.expander("ℹ️ Différence Tobit vs Simar-Wilson", expanded=False):
         st.markdown("""
@@ -5276,6 +4869,8 @@ with tab_malm:
 | Standard errors | Hessien numérique | **Bootstrap paramétrique** B=200 |
 | IC 95% | Non disponible | **Percentiles 2.5/97.5** |
 | Usage recommandé | Lecture rapide, interprétation | **Publication, validation** |
+
+*Réf. : Simar & Wilson (2007) Journal of Econometrics 136(1), 31-64*
         """)
 
     _sw_selected = st.multiselect(
@@ -5365,7 +4960,7 @@ with tab_malm:
         st.session_state["sw_results"] = None
 
 
-# TAB 12 — SYNTHÈSE MULTI-MODULE (v3.2)
+# TAB 11 — SYNTHÈSE MULTI-MODULE (v3.2)
 # ══════════════════════════════════════════════
 with tab_synth:
     _module_results = st.session_state.get("module_results", {})
@@ -5453,8 +5048,6 @@ sont automatiquement mappées vers les noms standard des modules.*
     _has_ft  = ('revpar_n1' in dea.df.columns and 'gop_n1' in dea.df.columns
                 and dea.df.get('revpar_n1', pd.Series(dtype=float)).fillna(0).sum() > 0
                 and dea.df.get('gop_n1',    pd.Series(dtype=float)).fillna(0).sum() > 0)
-    _has_mkt = any('march' in str(c).lower() for c in dea.df.columns)
-
     # Simar-Wilson : calculé à la volée si au moins 2 variables structurelles
     # exploitables et assez d'unités inefficientes pour les degrés de liberté
     _n_ineff_ui = sum(1 for s in dea.bcc_scores.values() if s < 1 - 1e-8)
@@ -5472,7 +5065,7 @@ sont automatiquement mappées vers les noms standard des modules.*
         ("2. Quadrants gestion x échelle",   True,           ""),
         ("3. Classement TOPSIS",             True,           ""),
         ("4. Super-efficience",              True,           ""),
-        ("5. SBM",               True,           ""),
+        ("5. SBM (Tone 2001)",               True,           ""),
         ("6. Slacks & gaspillages",          True,           ""),
         ("7. Métafrontière GTE/MTE/TGR",     True,           ""),
         ("8. Déterminants (Simar-Wilson)",   _has_sw,
@@ -5484,13 +5077,11 @@ sont automatiquement mappées vers les noms standard des modules.*
          "Colonnes revpar_n1 et gop_n1 requises en plus des données capital"),
         ("12. Malmquist (productivité N-1)", _has_n1,
          "Colonnes _n1 requises dans le fichier source"),
-        ("13. Positionnement marché",        _has_mkt,
-         "Colonnes RevPAR / ADR / OCC marché requises"),
     ]
     _ready = sum(1 for _, ok, _ in _SECTIONS if ok)
 
-    with st.expander(f"📋 Contenu du rapport — {_ready}/13 sections alimentées",
-                     expanded=(_ready < 13)):
+    with st.expander(f"📋 Contenu du rapport — {_ready}/12 sections alimentées",
+                     expanded=(_ready < 12)):
         _sc1, _sc2 = st.columns(2)
         for _i, (_nm, _ok, _fix) in enumerate(_SECTIONS):
             with (_sc1 if _i < 7 else _sc2):
@@ -5526,9 +5117,6 @@ sont automatiquement mappées vers les noms standard des modules.*
             if not _has_n1:
                 _MANQUE += [("nb_lits_n1/ nb_employes_n1 / couts_op_ex_n1 / taux_occupation_n1",
                              "Jeu complet de l'exercice précédent", "12")]
-            if not _has_mkt:
-                _MANQUE += [("RevPAR marché € / ADR marché € / OCC marché %",
-                             "Référentiel compset local par actif", "13")]
             if not _has_sw:
                 _MANQUE += [("classement_etoiles, saison_dummy, energy_kwh…",
                              "Variables structurelles hors modèle DEA", "8")]
@@ -5738,7 +5326,22 @@ st.markdown(
     """<div style='text-align:center;color:#94a3b8;font-size:0.75rem;line-height:1.8;padding:0.5rem 0;'>
     <b>DEA-H v3.9 · REIV Hospitality · Mehdi Sayyou</b><br>
     Modèles : BCC/CCR Input/Output-Oriented · TOPSIS Shannon entropy · K-means · Metafrontière GTE/MTE/TGR ·
-    Malmquist TFP (Catch-up × Frontier Shift) · Tobit Second Stage · Multi-Module DEA (7 dimensions)
+    Malmquist TFP (Catch-up × Frontier Shift) · Tobit Second Stage · Multi-Module DEA (7 dimensions)<br>
+    <b>Références :</b>
+    Charnes, Cooper &amp; Rhodes (1978) CCR ·
+    Banker, Charnes &amp; Cooper (1984) BCC ·
+    Barros (2005) format Barros ·
+    Min, Min &amp; Joo (2009) USALI ·
+    Assaf, Barros &amp; Josiassen (2010) Metafrontière ·
+    Shang, Wang &amp; Hung (2010) Stochastic DEA ·
+    Yu (2012) MDEA Room/F&amp;B · Mann-Whitney ·
+    Simar &amp; Wilson (2007) Tobit bootstrap ·
+    Caves, Christensen &amp; Diewert (1982) Malmquist ·
+    Färe, Grosskopf, Norris &amp; Zhang (1994) Décomposition TFP ·
+    Poldrugovac, Tekavcic &amp; Jankovic (2016) Mahalanobis ·
+    Vlad, Toma &amp; Fîntîneru (2026) TOPSIS entropy ·
+    Shirouyehzad et al. (2012) SERVQUAL ·
+    Via@ (2013) Benchmark 15–25% · Alpha opérateur
     </div>""",
     unsafe_allow_html=True,
 )
