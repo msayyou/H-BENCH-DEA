@@ -518,9 +518,16 @@ def render_synthesis_tab(
 # SIDEBAR MODULE SELECTOR (à appeler depuis app.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_module_selector(available_cols: list[str]) -> tuple[list[str], dict]:
+def render_module_selector(available_cols: list[str], proxy_cols: "set[str] | None" = None) -> tuple[list[str], dict]:
     """
     Affiche le sélecteur de modules dans la sidebar.
+
+    proxy_cols : colonnes fabriquées par reformulation arithmétique (adr,
+    rooms_revenue, trevpar, revenue_per_fte, total_revenue proxy) — ne comptent
+    pas pour satisfaire les "required" d'un module, sinon un module comme
+    Financier USALI ou Capital & Actifs se coche automatiquement sur une simple
+    reformulation du RevPAR plutôt que sur une vraie donnée départementale.
+
     Retourne :
         - active_modules : liste des modules cochés
         - variable_overrides : {module_id: {"inputs": [...], "outputs": [...]}}
@@ -538,7 +545,7 @@ def render_module_selector(available_cols: list[str]) -> tuple[list[str], dict]:
     variable_overrides = {}
 
     for mod_id, mod_cfg in MODULES.items():
-        feasibility = check_module_feasibility(mod_id, available_cols)
+        feasibility = check_module_feasibility(mod_id, available_cols, proxy_cols=proxy_cols)
         label = mod_cfg["label_fr"]
         coverage = feasibility["coverage_pct"]
 
