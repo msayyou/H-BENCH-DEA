@@ -1757,9 +1757,21 @@ NUMERIC_COLS = ['nb_chambres', 'nb_employes', 'couts_op_ex', 'revpar', 'satisfac
 def load_sample() -> pd.DataFrame:
     """
     Portefeuille de référence — Meliá Group Espagne (24 hôtels)
-    DEA-H v3.9 · REIV Hospitality
+    DEA-H v4 · REIV Hospitality
     Satisfaction /5→/10 · couts_op_ex M€ · financiers k€
-    Active tous les onglets : Capital · MDEA · Malmquist · ESG · Multi-Module
+
+    Ne contient QUE les colonnes de base DEA-H (celles qu'un vrai client
+    fournirait) + les colonnes N-1 pour Malmquist. Les colonnes multi-module
+    (rooms_revenue, fb_revenue, total_revenue, energy_kwh, water_m3,
+    co2_tonnes, adr, trevpar, revenue_per_fte, book_value_assets, ebitda...)
+    ont été retirées : elles étaient des reformulations à ratio fixe de
+    revpar/nb_chambres/surface_m2 (ex. energy_kwh = 228,125 × surface_m2 pour
+    les 24 hôtels, sans exception), pas de vraies données Meliá — leur
+    présence faisait passer artificiellement les modules Financier USALI,
+    Capital & Actifs, Main-d'œuvre, Revenue Management et ESG en "disponible"
+    sans qu'aucune vraie donnée indépendante ne les alimente. Avec ce jeu de
+    données, seuls Opérationnel Global et Qualité & Satisfaction sont
+    honnêtement calculables — comme sur un vrai fichier client non enrichi.
     """
     d = {
         'hotel_name': ['Meliá South Beach', 'Meliá Calviá Beach', 'Sol Wave House All Suites', 'Sol Barbados', 'Sol House The Studio', 'Sol Guadalupe', 'Innside by Meliá Calviá Beach', 'ME Marbella', 'Meliá Madrid Princesa', 'Meliá Galgos (Madrid)', 'Meliá Castilla (Madrid - Part)', 'Tryp Madrid Gran Vía', 'Tryp Madrid Chamartín', 'Tryp Madrid Atocha', 'Meliá Atlanterra (Cadix)', 'Meliá Sol y Nieve (Sierra Nevada)', 'Sol Pelicanos Ocas (Benidorm)', 'Meliá Puerto de la Cruz (Ténérife)', 'Sol Lanzarote', 'Meliá Sierra Nevada', 'Meliá María Pita (La Corogne)', 'Meliá San Sebastián Orly', 'Meliá Alicante', 'Sol Príncipe (Torremolinos)'],
@@ -1772,34 +1784,21 @@ def load_sample() -> pd.DataFrame:
         'surface_m2': [9600, 12640, 7360, 13680, 11600, 12120, 10880, 7200, 10960, 14240, 16000, 7000, 7960, 5960, 11520, 10320, 31760, 12000, 13720, 8840, 7320, 4080, 21800, 31960],
         'gop': [4740.6, 5727.3, 3122.5, 5731.0, 4851.0, 3730.7, 4923.9, 5654.9, 5480.3, 6190.7, 8768.8, 2645.5, 2316.5, 2363.9, 5838.8, 3927.0, 10298.6, 3758.2, 5205.4, 3049.9, 1925.8, 2004.3, 9163.3, 11211.9],
         # CAPEX différenciés par catégorie (k€/an): 3★=0.90, 4★=1.75, 4★Sup=2.40, 5★=3.80 k€/ch
-        # (taux benchmark secteur — CAPEX réels par hôtel non disponibles)
+        # (taux benchmark secteur — CAPEX réels par hôtel non disponibles ; même
+        # réserve que ci-dessus, conservé car colonne DEA-H de base préexistante,
+        # pas ajoutée pour le système multi-module)
         'capex_annuel': [576.0, 553.0, 322.0, 598.5, 507.5, 530.2, 476.0, 684.0, 1041.2, 623.0, 700.0, 157.5, 179.1, 260.8, 504.0, 451.5, 714.6, 525.0, 600.2, 386.8, 320.2, 178.5, 953.8, 1398.2],
         'classement_etoiles': [5, 4, 4, 4, 4, 3, 5, 5, 5, 4, 5, 3, 3, 4, 5, 4, 3, 3, 4, 4, 3, 5, 4, 3],
         'categorie': ['4★ Sup','4★','4★','4★','4★','3★','4★','5★','5★','4★','4★','3★','3★','4★','4★','4★','3★','4★','4★','4★','3★','4★','4★','4★'],
         # Saisonnalité : 1=resort/côtier/montagne (haute saison), 0=urbain/année ronde
         # Réf. : Pulina & Santoni (2018) ; Cracolici et al. (2008)
         'saison_dummy': [1,1,1,1,1,1,1,1,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,1],
-        'energy_kwh': [2190000, 2883500, 1679000, 3120750, 2646250, 2764875, 2482000, 1642500, 2500250, 3248500, 3650000, 1596875, 1815875, 1359625, 2628000, 2354250, 7245250, 2737500, 3129875, 2016625, 1669875, 930750, 4973125, 7290875],
-        'water_m3': [43800, 57670, 33580, 62415, 52925, 55298, 49640, 32850, 50005, 64970, 73000, 31938, 36318, 27193, 52560, 47085, 144905, 54750, 62598, 40333, 33398, 18615, 99463, 145818],
-        'co2_tonnes': [1095, 1442, 840, 1560, 1323, 1382, 1241, 821, 1250, 1624, 1825, 798, 908, 680, 1314, 1177, 3623, 1369, 1565, 1008, 835, 465, 2487, 3645],
-        'payroll_total': [3400.0, 4400.0, 2600.0, 4800.0, 3800.0, 4000.0, 3600.0, 5600.0, 4600.0, 5200.0, 6400.0, 2200.0, 2400.0, 2000.0, 3800.0, 3400.0, 8400.0, 3800.0, 4400.0, 3000.0, 2400.0, 1600.0, 6800.0, 8800.0],
-        'rooms_revenue': [10416.6, 12598.7, 6853.7, 12617.5, 10704.4, 8221.4, 10821.7, 12472.2, 12077.6, 13617.0, 19272.0, 5825.4, 5101.2, 5207.2, 12842.5, 8639.5, 22634.4, 8281.8, 11440.4, 6714.1, 4232.4, 4415.0, 20146.8, 24641.4],
-        'fb_revenue': [3125.0, 3779.6, 2056.1, 3785.2, 3211.3, 2466.4, 3246.5, 3741.7, 3623.3, 4085.1, 5781.6, 1747.6, 1530.3, 1562.1, 3852.7, 2591.8, 6790.3, 2484.5, 3432.1, 2014.2, 1269.7, 1324.5, 6044.1, 7392.4],
-        'total_revenue': [14270.8, 17260.2, 9389.6, 17285.9, 14665.0, 11263.3, 14825.7, 17087.0, 16546.3, 18655.3, 26402.6, 7980.8, 6988.6, 7133.8, 17594.2, 11836.1, 31009.1, 11346.0, 15673.3, 9198.3, 5798.4, 6048.5, 27601.2, 33758.7],
-        'rooms_cost': [2604.2, 3527.6, 1919.0, 3532.9, 2997.2, 2630.8, 2705.4, 3118.1, 3019.4, 3812.8, 4818.0, 1864.1, 1632.4, 1458.0, 3210.6, 2419.1, 7243.0, 2650.2, 3203.3, 1879.9, 1354.4, 1103.8, 5641.1, 7885.2],
-        'fb_cost': [2250.0, 2721.3, 1480.4, 2725.3, 2312.1, 1775.8, 2337.5, 2694.0, 2608.8, 2941.3, 4162.8, 1258.3, 1101.8, 1124.7, 2773.9, 1866.1, 4889.0, 1788.8, 2471.1, 1450.2, 914.2, 953.6, 4351.8, 5322.5],
-        'adr': [176.8, 174.7, 141.2, 130.7, 154.3, 128.9, 154.8, 356.2, 198.7, 186.7, 206.2, 132.5, 128.4, 145.7, 165.1, 198.5, 92.4, 107.1, 120.7, 196.9, 122.2, 189.9, 147.0, 106.7],
-        'trevpar': [162.9, 149.6, 139.8, 138.5, 138.5, 101.8, 149.3, 260.1, 165.4, 143.6, 180.8, 124.9, 96.2, 131.2, 167.4, 125.7, 107.0, 103.6, 125.2, 114.0, 86.8, 162.5, 138.8, 115.8],
-        'revenue_per_fte': [167.9, 156.9, 144.5, 144.0, 154.4, 112.6, 164.7, 122.0, 143.9, 143.5, 165.0, 145.1, 116.5, 142.7, 185.2, 139.2, 147.7, 119.4, 142.5, 122.6, 96.6, 151.2, 162.4, 153.4],
-        'book_value_assets': [67200, 56880, 33120, 61560, 52200, 36360, 76160, 50400, 76720, 64080, 112000, 21000, 23880, 26820, 80640, 46440, 95280, 36000, 61740, 39780, 21960, 28560, 98100, 95880],
-        'ebitda': [4740.6, 5727.3, 3122.5, 5731.0, 4851.0, 3730.7, 4923.9, 5654.9, 5480.3, 6190.7, 8768.8, 2645.5, 2316.5, 2363.9, 5838.8, 3927.0, 10298.6, 3758.2, 5205.4, 3049.9, 1925.8, 2004.3, 9163.3, 11211.9],
         'nb_chambres_n1': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
         'nb_employes_n1': [86, 108, 65, 121, 94, 101, 87, 143, 115, 126, 163, 55, 58, 49, 92, 82, 208, 92, 110, 72, 61, 40, 164, 212],
         'couts_op_ex_n1': [3.728, 5.037, 2.825, 5.564, 4.566, 4.593, 4.227, 6.33, 5.123, 6.011, 7.184, 2.48, 2.695, 2.265, 4.406, 4.004, 9.331, 4.049, 4.796, 3.501, 2.641, 1.929, 7.978, 9.832],
         'revpar_n1': [136.0, 131.5, 115.7, 106.6, 114.0, 89.9, 124.8, 241.7, 142.3, 131.5, 154.3, 103.9, 86.8, 109.4, 135.2, 123.2, 80.2, 86.0, 96.6, 116.7, 83.2, 140.4, 117.1, 91.8],
         'satisfaction_n1': [9.0, 8.5, 8.2, 8.4, 8.7, 8.0, 9.2, 9.4, 8.6, 8.4, 8.5, 7.8, 7.9, 8.0, 9.0, 8.4, 7.8, 8.0, 8.5, 8.2, 8.7, 9.2, 8.2, 8.0],
         'taux_occupation_n1': [79.2, 75.1, 80.2, 82.7, 75.8, 71.1, 82.9, 70.5, 76.3, 73.3, 74.9, 79.0, 72.6, 78.4, 83.0, 64.6, 87.0, 81.1, 84.5, 64.1, 67.2, 77.0, 77.4, 85.9],
-        'rooms_revenue_n1': [10043.1, 12136.1, 6208.2, 11611.8, 10203.3, 7922.6, 9996.6, 11884.6, 11708.7, 12936.4, 17688.2, 5294.7, 4709.9, 5002.8, 12319.0, 8036.9, 20559.6, 7987.9, 10952.7, 6442.2, 3858.8, 4242.1, 18631.8, 22901.8],
     }
     return pd.DataFrame(d).set_index('hotel_name')
 
