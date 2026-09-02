@@ -4141,7 +4141,8 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
             else:
                 _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
                 st.dataframe(_anova_summ, use_container_width=True, hide_index=True)
-                st.dataframe(_anova_res, use_container_width=True, hide_index=True)
+                if not _anova_res.empty:
+                    st.dataframe(_anova_res, use_container_width=True, hide_index=True)
         except Exception as _e:
             st.info(f"ANOVA non disponible : {_e}")
 
