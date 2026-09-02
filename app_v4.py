@@ -1737,18 +1737,23 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📐 Mode variables (Raab & Lichty, 2002)")
     _n_hotels = len(df) if 'df' in dir() else 0
-    if _n_hotels > 0 and _n_hotels < 15:
-        st.warning(f"⚠️ {_n_hotels} hôtels — en dessous du seuil standard (15). Voir mode ci-dessous.")
+    _std_min = 18 if 'nb_chambres' in df.columns else 15
+    if _n_hotels > 0 and _n_hotels < _std_min:
+        st.warning(f"⚠️ {_n_hotels} hôtels — en dessous du seuil standard ({_std_min}). Voir mode ci-dessous.")
 
     dea_mode = st.radio(
         "Nombre de variables",
         options=['standard', 'compact', 'minimal'],
         format_func=lambda x: {
-            'standard': f"Standard (2+3) — min 15 hôtels · ETP + OpEx → RevPAR + Sat + TO",
+            'standard': (f"Standard ({'3+3' if 'nb_chambres' in df.columns else '2+3'}) — min "
+                         f"{'18' if 'nb_chambres' in df.columns else '15'} hôtels · "
+                         f"{'Chambres + ETP + OpEx' if 'nb_chambres' in df.columns else 'ETP + OpEx'} → RevPAR + Sat + TO"),
             'compact' : f"Compact (2+2) — min 12 hôtels · ETP + OpEx → RevPAR + Satisfaction",
             'minimal' : f"Minimal (2+1) — min 9 hôtels  · ETP + OpEx → RevPAR",
         }[x],
-        help="Réduire les variables si votre compset est petit. "
+        help="Réduire les variables si votre compset est petit. Standard utilise nb_chambres "
+             "automatiquement s'il est présent dans le fichier (aucune vérification de fiabilité "
+             "— si la colonne existe, elle est utilisée). "
              "Règle : n_hôtels ≥ 3 × (n_inputs + n_outputs). Réf. : Raab & Lichty (2002).",
         index=0,
     )
@@ -2118,10 +2123,19 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         dea.orientation     = orientation
         dea.mode            = dea_mode if 'dea_mode' in dir() else 'standard'
         dea.has_chambres    = 'nb_chambres'   in df.columns
-        # nb_chambres n'est plus un input DEA par défaut — non fiable sans
-        # vraie donnée (cf. audit portefeuille Ibis Atream). Tous les modes
-        # tournent désormais sur ETP + charges uniquement.
-        dea.input_cols      = ['nb_employes', 'couts_op_ex']
+        # nb_chambres est un input DEA standard dans la littérature (Barros
+        # 2005) — utilisé quand une vraie donnée est disponible, ignoré
+        # sinon. Ce n'est pas la variable qui pose problème, c'est une
+        # colonne source non fiable qui la remplace parfois (cf. audit
+        # portefeuille Ibis Atream) : la solution est de fournir un vrai
+        # nombre de chambres, pas de l'exclure définitivement du modèle.
+        # Compact/minimal restent volontairement à variables réduites,
+        # indépendamment de la disponibilité de nb_chambres — c'est leur
+        # raison d'être pour les petits échantillons (Raab & Lichty 2002).
+        if dea_mode == 'standard' and dea.has_chambres:
+            dea.input_cols  = ['nb_chambres', 'nb_employes', 'couts_op_ex']
+        else:
+            dea.input_cols  = ['nb_employes', 'couts_op_ex']
         dea.output_cols     = (['revpar'] if dea_mode == 'minimal' else ['revpar','satisfaction'])
         if dea_mode == 'standard': dea.output_cols = ['revpar','satisfaction','taux_occupation']
         _n_vars = len(dea.input_cols) + len(dea.output_cols)
