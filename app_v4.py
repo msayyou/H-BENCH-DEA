@@ -110,20 +110,22 @@ def generate_fiche_actif_pdf(
     n     = dea.n
 
     raw   = dea.df.loc[hotel]
-    lits  = float(raw["nb_chambres"])
+    _has_ch = 'nb_chambres' in raw.index and pd.notna(raw['nb_chambres'])
+    lits  = float(raw["nb_chambres"]) if _has_ch else None
     emp   = float(raw["nb_employes"])
     costs = float(raw["couts_op_ex"])
     rvp   = float(raw["revpar"])
     sat   = float(raw["satisfaction"])
     occ   = float(raw["taux_occupation"])
-    nights = lits * jours_exploit * occ / 100
-    ca_est = rvp * lits * jours_exploit
+    nights = (lits * jours_exploit * occ / 100) if _has_ch else None
+    ca_est = (rvp * lits * jours_exploit) if _has_ch else None
 
     slk_emp = dea.slacks.get(hotel, {}).get("inputs", {}).get("nb_employes", 0)
     slk_rvp = dea.slacks.get(hotel, {}).get("outputs", {}).get("revpar", 0)
     up_fte  = round(slk_emp * avg_salary / 1000)
     # Chambres disponibles x jours — le RevPAR intègre déjà l'occupation
-    up_rev  = round(slk_rvp * lits * jours_exploit * revpar_value / 1_000_000, 2)
+    up_rev  = (round(slk_rvp * lits * jours_exploit * revpar_value / 1_000_000, 2)
+               if _has_ch else None)
 
     peers   = dea.peers.get(hotel, {})
     targets = dea.targets.get(hotel, {})
@@ -171,11 +173,15 @@ def generate_fiche_actif_pdf(
     story.append(Paragraph("Données opérationnelles", h2_s))
     raw_data = [
         ["Indicateur",       "Valeur",              "Indicateur",           "Valeur"],
-        ["Chambres",         f"{int(lits)}",         "RevPAR",              f"{rvp:.0f} €"],
-        ["ETP",              f"{emp:.0f}",           "Taux occupation",     f"{occ:.1f}%"],
-        ["Charges op.",      f"{costs:.2f} M€",      "Satisfaction",        f"{sat:.1f}/10"],
-        ["CA estimé",        f"{ca_est/1e6:.2f} M€", "Nuitées estimées",    f"{nights:,.0f}"],
+        ["ETP",              f"{emp:.0f}",           "RevPAR",              f"{rvp:.0f} €"],
+        ["Taux occupation",  f"{occ:.1f}%",          "Satisfaction",        f"{sat:.1f}/10"],
+        ["Charges op.",      f"{costs:.2f} M€",      "Chambres" if _has_ch else "Chambres",
+         f"{int(lits)}" if _has_ch else "n/d"],
     ]
+    if _has_ch:
+        raw_data.append(["CA estimé",        f"{ca_est/1e6:.2f} M€", "Nuitées estimées",    f"{nights:,.0f}"])
+    else:
+        raw_data.append(["CA estimé", "n/d — chambres", "Nuitées estimées", "n/d — chambres"])
     raw_table = Table(raw_data, colWidths=[3.8*cm, 2.8*cm, 4.0*cm, 2.8*cm])
     raw_table.setStyle(TableStyle([
         ("BACKGROUND",  (0,0), (-1,0), BLUE),
@@ -199,7 +205,7 @@ def generate_fiche_actif_pdf(
     tgt_out = targets.get("outputs", {})
 
     plan_data = [["Variable", "Actuel", "Cible", "Slack", "Amélioration"]]
-    for col in ["nb_chambres", "nb_employes", "couts_op_ex"]:
+    for col in dea.input_cols:
         cur = float(raw[col])
         tgt = tgt_in.get(col, cur)
         slk = slk_in.get(col, 0)
@@ -226,9 +232,10 @@ def generate_fiche_actif_pdf(
     story.append(plan_table)
 
     # Upside financier
-    upside_txt = f"Upside ETP : {up_fte} k€/an  |  Upside RevPAR : {up_rev:.2f} M€/an"
+    _up_rev_txt = f"{up_rev:.2f} M€/an" if up_rev is not None else "n/d — chambres"
+    upside_txt = f"Upside ETP : {up_fte} k€/an  |  Upside RevPAR : {_up_rev_txt}"
     story.append(Spacer(1, 4))
-    if up_fte > 0 or up_rev > 0:
+    if up_fte > 0 or (up_rev or 0) > 0:
         story.append(Paragraph(f"→ {upside_txt}", alert_s))
 
     # Peers
@@ -1033,13 +1040,14 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                         'classement (★)'    : int(_v(h, 'classement_etoiles', 3) or 3),
                     }
                 _auto_df = pd.DataFrame(_rows_auto).T.loc[dea.hotels]
-                # Détection d'unité : si CAPEX/chambre < 0,05 k€, les données
-                # étaient déjà en k€ dans le fichier — on annule la division
-                _med = (_auto_df['capex_annuel (k€)'] /
-                        pd.Series({h: max(_v(h, 'nb_chambres'), 1) for h in dea.hotels})).median()
-                if _med < 0.05:
-                    _auto_df['capex_annuel (k€)'] *= 1000
-                    _auto_df['gop (k€)']          *= 1000
+                if dea.has_chambres:
+                    # Détection d'unité : si CAPEX/chambre < 0,05 k€, les données
+                    # étaient déjà en k€ dans le fichier — on annule la division
+                    _med = (_auto_df['capex_annuel (k€)'] /
+                            pd.Series({h: max(_v(h, 'nb_chambres'), 1) for h in dea.hotels})).median()
+                    if _med < 0.05:
+                        _auto_df['capex_annuel (k€)'] *= 1000
+                        _auto_df['gop (k€)']          *= 1000
                 if _cap_ok(_auto_df):
                     cap_input, _has_cap, _cap_auto = _auto_df, True, True
             except Exception:
@@ -1060,16 +1068,24 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             surf  = float(cap_input.loc[h, 'surface_m2'] or 0)
             capex = float(cap_input.loc[h, 'capex_annuel (k€)'] or 0)
             gop   = float(cap_input.loc[h, 'gop (k€)'] or 0)
-            lits  = _v(h, 'nb_chambres')
-            rvp   = _v(h, 'revpar')
-            # CA = RevPAR x lits x jours (RevPAR intègre déjà l'occupation)
-            ca    = rvp * lits * jours_exploit / 1000     # k€
+            # CAPEX/chambre et Rendement exigent un vrai nombre de chambres —
+            # plus de repli RevPAR x lits x jours (proxy non fiable, cf. audit
+            # portefeuille Ibis Atream : rapport chambres/lits de 1:1 à 7:1
+            # selon l'hôtel, aucune conversion fiable possible).
+            if dea.has_chambres:
+                lits = _v(h, 'nb_chambres')
+            else:
+                lits = None
+            if dea.has_trevpar:
+                ca = _v(h, 'total_revenue') / 1000  # k€
+            else:
+                ca = None
             cap_rows_pdf.append({
                 'h': h,
                 'goppam' : gop * 1000 / surf if surf > 0 else None,
-                'capexch': capex / lits      if lits > 0 else None,
-                'rend'   : ca / capex        if capex > 0 else None,
-                'marge'  : gop / ca * 100    if ca > 0 else None,
+                'capexch': (capex / lits) if (lits and lits > 0) else None,
+                'rend'   : (ca / capex) if (ca is not None and capex > 0) else None,
+                'marge'  : (gop / ca * 100) if (ca is not None and ca > 0) else None,
                 'bcc'    : dea.bcc_scores.get(h, 0),
             })
         cap_rows_pdf.sort(key=lambda r: (r['goppam'] is None, -(r['goppam'] or 0)))
@@ -1175,10 +1191,15 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             f"repli. Norme retenue : {_TH['ft_norm']:.0%}. Réf. : Russo &amp; Legel, hospitality "
             "management accounting.", meth_s))
 
-        _hn1 = ('revpar_n1' in dea.df.columns and 'gop_n1' in dea.df.columns
+        _hn1 = (dea.has_chambres
+                and 'revpar_n1' in dea.df.columns and 'gop_n1' in dea.df.columns
                 and dea.df['revpar_n1'].fillna(0).sum() > 0
                 and dea.df['gop_n1'].fillna(0).sum() > 0)
-        if _hn1:
+        if not dea.has_chambres:
+            story.append(Paragraph(
+                "Non calculable : le CA N et N-1 se reconstruisent par RevPAR × chambres "
+                "× jours — aucun repli fiable sans un vrai nombre de chambres.", body_s))
+        elif _hn1:
             fd = [["Hôtel", "CA N (k€)", "CA N-1 (k€)", "Var. CA", "Flow Through", "Qualité"]]
             _fts = []
             for h in dea.hotels:
@@ -1716,14 +1737,14 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📐 Mode variables (Raab & Lichty, 2002)")
     _n_hotels = len(df) if 'df' in dir() else 0
-    if _n_hotels > 0 and _n_hotels < 18:
-        st.warning(f"⚠️ {_n_hotels} hôtels — en dessous du seuil standard (18). Voir mode ci-dessous.")
+    if _n_hotels > 0 and _n_hotels < 15:
+        st.warning(f"⚠️ {_n_hotels} hôtels — en dessous du seuil standard (15). Voir mode ci-dessous.")
 
     dea_mode = st.radio(
         "Nombre de variables",
         options=['standard', 'compact', 'minimal'],
         format_func=lambda x: {
-            'standard': f"Standard (3+3) — min 18 hôtels · nb_chambres + ETP + OpEx → RevPAR + Sat + TO",
+            'standard': f"Standard (2+3) — min 15 hôtels · ETP + OpEx → RevPAR + Sat + TO",
             'compact' : f"Compact (2+2) — min 12 hôtels · ETP + OpEx → RevPAR + Satisfaction",
             'minimal' : f"Minimal (2+1) — min 9 hôtels  · ETP + OpEx → RevPAR",
         }[x],
@@ -1776,7 +1797,8 @@ with st.sidebar:
 # ─────────────────────────────────────────────
 #  Chargement des données
 # ─────────────────────────────────────────────
-NUMERIC_COLS = ['nb_chambres', 'nb_employes', 'couts_op_ex', 'revpar', 'satisfaction', 'taux_occupation']
+NUMERIC_COLS = ['nb_employes', 'couts_op_ex', 'revpar', 'satisfaction', 'taux_occupation']
+OPTIONAL_NUMERIC_COLS = ['nb_chambres']  # jamais requis — non fiable sans vraie donnée
 
 def load_sample() -> pd.DataFrame:
     """
@@ -1883,6 +1905,8 @@ if uploaded_file is not None:
         st.stop()
     for col in NUMERIC_COLS:
         df[col] = pd.to_numeric(df[col], errors='coerce')
+    if 'nb_chambres' in df.columns:
+        df['nb_chambres'] = pd.to_numeric(df['nb_chambres'], errors='coerce')
 
     _n_before = len(df)
     df = df.dropna(subset=NUMERIC_COLS)
@@ -2093,7 +2117,11 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         dea.n               = len(dea.hotels)
         dea.orientation     = orientation
         dea.mode            = dea_mode if 'dea_mode' in dir() else 'standard'
-        dea.input_cols      = ['nb_employes','couts_op_ex'] if dea_mode in ('compact','minimal') else ['nb_chambres','nb_employes','couts_op_ex']
+        dea.has_chambres    = 'nb_chambres'   in df.columns
+        # nb_chambres n'est plus un input DEA par défaut — non fiable sans
+        # vraie donnée (cf. audit portefeuille Ibis Atream). Tous les modes
+        # tournent désormais sur ETP + charges uniquement.
+        dea.input_cols      = ['nb_employes', 'couts_op_ex']
         dea.output_cols     = (['revpar'] if dea_mode == 'minimal' else ['revpar','satisfaction'])
         if dea_mode == 'standard': dea.output_cols = ['revpar','satisfaction','taux_occupation']
         _n_vars = len(dea.input_cols) + len(dea.output_cols)
@@ -2224,55 +2252,62 @@ with tab_board:
     _kc5.metric("🥇 Leader TOPSIS",   (_best_tp[:18] if len(_best_tp) > 18 else _best_tp))
 
     # ── Upside financier total ───────────────────────────────────────────────
-    _up_fte = _up_rev = _up_gop = _ca_tot = 0.0
-    for _h in dea.hotels:
-        _lits  = float(dea.df.loc[_h, 'nb_chambres'])
-        _rvp   = float(dea.df.loc[_h, 'revpar'])
-        _se    = dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', 0)
-        _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
-        _up_fte += _se * avg_salary / 1000
-        # CA = RevPAR × lits × jours. Ne PAS multiplier par le taux
-        # d'occupation : RevPAR = ADR × OCC l'intègre déjà (USALI / Kimes 1989).
-        _ca_tot += _rvp * _lits * jours_exploit * revpar_value / 1_000_000
-        _up_rev += _sr  * _lits * jours_exploit * revpar_value / 1_000_000
-        _up_gop += _sr  * _lits * jours_exploit * revpar_value * ft_pct / 1_000_000
-
-    _pct_rev = (_up_rev / _ca_tot * 100) if _ca_tot > 0 else 0
-
-    st.markdown("---")
-    _uc1, _uc2, _uc3 = st.columns(3)
-    _uc1.metric("💼 Upside ETP total", f"{_up_fte:,.0f} k€/an",
-                help="Réduction de masse salariale si alignement sur la frontière DEA. "
-                     f"Hypothèse : {avg_salary:,.0f} € chargés par ETP.".replace(",", " "))
-    _uc2.metric("🏨 Upside RevPAR total", f"{_up_rev:,.1f} M€/an".replace(",", " "),
-                delta=f"{_pct_rev:.0f}% du CA", delta_color="off",
-                help=f"Revenu additionnel théorique si tous les actifs atteignaient leur "
-                     f"RevPAR cible. CA actuel du portefeuille : {_ca_tot:,.0f} M€/an.".replace(",", " "))
-    _uc3.metric("💰 Upside GOP /FT estimé", f"{_up_gop:,.1f} M€/an".replace(",", " "),
-                help=f"Upside RevPAR converti au Flow Through de {ft_pct:.0%}.")
-
-    # ── Contrôle de plausibilité ────────────────────────────────────────────
-    if _pct_rev > 40:
-        st.warning(
-            f"⚠️ **Upside de {_pct_rev:.0f}% du chiffre d'affaires — chiffre à ne pas "
-            "communiquer tel quel.** Les slacks d'output mesurent la distance à la "
-            "frontière *toutes choses égales par ailleurs* : c'est un plafond "
-            "mathématique, pas un potentiel commercial. Un écart de cette ampleur "
-            "signale généralement un modèle sous-spécifié — trop peu de variables pour "
-            "le nombre d'actifs, ou un compset hétérogène. "
-            + ("**Vous êtes en mode réduit** : repassez en mode Standard si votre "
-               "fichier contient les six variables, ou consultez la Métafrontière pour "
-               "corriger l'hétérogénéité entre segments."
-               if dea_mode != 'standard' else
-               "Vérifiez l'homogénéité du compset via la Métafrontière.")
+    if not dea.has_chambres:
+        st.info(
+            "💼 Upside ETP/RevPAR/GOP en € — non calculable : le CA se reconstruit "
+            "par RevPAR × chambres × jours, aucun repli fiable sans un vrai nombre "
+            "de chambres. Fournissez-le via l'enrichissement pour débloquer ces KPIs."
         )
-    elif _pct_rev > 0:
-        st.caption(
-            f"Upside RevPAR = {_pct_rev:.0f}% du CA actuel ({_ca_tot:,.0f} M€/an). "
-            "Il s'agit d'un plafond théorique supposant une convergence intégrale vers "
-            "les pratiques des pairs — à pondérer par un facteur de réalisation de 30 à "
-            "50 % pour un plan à 24 mois.".replace(",", " ")
-        )
+    else:
+        _up_fte = _up_rev = _up_gop = _ca_tot = 0.0
+        for _h in dea.hotels:
+            _lits  = float(dea.df.loc[_h, 'nb_chambres'])
+            _rvp   = float(dea.df.loc[_h, 'revpar'])
+            _se    = dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', 0)
+            _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
+            _up_fte += _se * avg_salary / 1000
+            # CA = RevPAR × lits × jours. Ne PAS multiplier par le taux
+            # d'occupation : RevPAR = ADR × OCC l'intègre déjà (USALI / Kimes 1989).
+            _ca_tot += _rvp * _lits * jours_exploit * revpar_value / 1_000_000
+            _up_rev += _sr  * _lits * jours_exploit * revpar_value / 1_000_000
+            _up_gop += _sr  * _lits * jours_exploit * revpar_value * ft_pct / 1_000_000
+
+        _pct_rev = (_up_rev / _ca_tot * 100) if _ca_tot > 0 else 0
+
+        st.markdown("---")
+        _uc1, _uc2, _uc3 = st.columns(3)
+        _uc1.metric("💼 Upside ETP total", f"{_up_fte:,.0f} k€/an",
+                    help="Réduction de masse salariale si alignement sur la frontière DEA. "
+                         f"Hypothèse : {avg_salary:,.0f} € chargés par ETP.".replace(",", " "))
+        _uc2.metric("🏨 Upside RevPAR total", f"{_up_rev:,.1f} M€/an".replace(",", " "),
+                    delta=f"{_pct_rev:.0f}% du CA", delta_color="off",
+                    help=f"Revenu additionnel théorique si tous les actifs atteignaient leur "
+                         f"RevPAR cible. CA actuel du portefeuille : {_ca_tot:,.0f} M€/an.".replace(",", " "))
+        _uc3.metric("💰 Upside GOP /FT estimé", f"{_up_gop:,.1f} M€/an".replace(",", " "),
+                    help=f"Upside RevPAR converti au Flow Through de {ft_pct:.0%}.")
+
+        # ── Contrôle de plausibilité ────────────────────────────────────────────
+        if _pct_rev > 40:
+            st.warning(
+                f"⚠️ **Upside de {_pct_rev:.0f}% du chiffre d'affaires — chiffre à ne pas "
+                "communiquer tel quel.** Les slacks d'output mesurent la distance à la "
+                "frontière *toutes choses égales par ailleurs* : c'est un plafond "
+                "mathématique, pas un potentiel commercial. Un écart de cette ampleur "
+                "signale généralement un modèle sous-spécifié — trop peu de variables pour "
+                "le nombre d'actifs, ou un compset hétérogène. "
+                + ("**Vous êtes en mode réduit** : repassez en mode Standard si votre "
+                   "fichier contient les six variables, ou consultez la Métafrontière pour "
+                   "corriger l'hétérogénéité entre segments."
+                   if dea_mode != 'standard' else
+                   "Vérifiez l'homogénéité du compset via la Métafrontière.")
+            )
+        elif _pct_rev > 0:
+            st.caption(
+                f"Upside RevPAR = {_pct_rev:.0f}% du CA actuel ({_ca_tot:,.0f} M€/an). "
+                "Il s'agit d'un plafond théorique supposant une convergence intégrale vers "
+                "les pratiques des pairs — à pondérer par un facteur de réalisation de 30 à "
+                "50 % pour un plan à 24 mois.".replace(",", " ")
+            )
 
     # ── Verdict stratégique automatique ─────────────────────────────────────
     st.markdown("---")
@@ -2354,21 +2389,23 @@ with tab_board:
     st.markdown("---")
     st.markdown('<p class="section-title">🎯 Classement Composite — Score Pi (Multi-critères)</p>', unsafe_allow_html=True)
     st.caption(
-        "TOPSIS composite : BCC · RevPAR · Satisfaction · TO · ETP/chambre · Coût/chambre. "
-        "Pondération Shannon entropy (α=0.6). Voir Tab 10 pour le détail complet."
+        "TOPSIS composite : BCC · RevPAR · Satisfaction · TO"
+        + (" · ETP/chambre · Coût/chambre" if dea.has_chambres else "")
+        + ". Pondération Shannon entropy (α=0.6). Voir Tab 10 pour le détail complet."
     )
     try:
         _bcc_s  = pd.Series(dea.bcc_scores)
-        _etp_r  = dea.df['nb_employes'] / dea.df['nb_chambres']
-        _cpor   = dea.df['couts_op_ex'] / dea.df['nb_chambres']
         _dm_b   = pd.DataFrame({
             'DEA BCC'   : _bcc_s,
             'RevPAR'    : dea.df['revpar'],
             'Satisfaction': dea.df['satisfaction'],
             'TO%'       : dea.df['taux_occupation'],
-            'ETP_inv'   : (1 / _etp_r).replace([np.inf], 0),
-            'CPOR_inv'  : (1 / _cpor).replace([np.inf], 0),
         }, index=dea.hotels).astype(float)
+        if dea.has_chambres:
+            _etp_r  = dea.df['nb_employes'] / dea.df['nb_chambres']
+            _cpor   = dea.df['couts_op_ex'] / dea.df['nb_chambres']
+            _dm_b['ETP_inv']  = (1 / _etp_r).replace([np.inf], 0)
+            _dm_b['CPOR_inv'] = (1 / _cpor).replace([np.inf], 0)
         _X = _dm_b.values; _nc = _X.shape[1]
         _Xn = np.zeros_like(_X)
         for _j in range(_nc):
@@ -2839,7 +2876,6 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
 
     _compset_init = pd.DataFrame({
         'Hôtel'           : dea.hotels,
-        'Capacité (chambres)' : [int(dea.df.loc[h, 'nb_chambres']) for h in dea.hotels],
         'Annee ouv.'      : [0]*dea.n,
         'Dern. renov.'    : [0]*dea.n,
         'Classement (e)'  : [3]*dea.n,
@@ -2848,38 +2884,51 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         'Localisation'    : ['Centre-ville']*dea.n,
         'Gestion'         : ['3rd party']*dea.n,
     }).set_index('Hôtel')
+    if dea.has_chambres:
+        _compset_init.insert(0, 'Capacité (chambres)',
+                              [int(dea.df.loc[h, 'nb_chambres']) for h in dea.hotels])
     if 'compset_profile' not in st.session_state or set(st.session_state.get('compset_profile', pd.DataFrame()).index) != set(dea.hotels):
         st.session_state['compset_profile'] = _compset_init
 
+    _col_cfg = {
+        'Annee ouv.'    : st.column_config.NumberColumn('Annee ouv.', min_value=1800, max_value=2030, format='%d'),
+        'Dern. renov.'  : st.column_config.NumberColumn('Dern. renov.', min_value=1800, max_value=2030, format='%d'),
+        'Classement (e)': st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
+        'Affiliation'   : st.column_config.SelectboxColumn('Affiliation', options=['Independant','Franchise','Mgmt contract','Owner-operated']),
+        'Localisation'  : st.column_config.SelectboxColumn('Localisation', options=['Centre-ville','Suburban','Airport','Resort','Route']),
+        'Gestion'       : st.column_config.SelectboxColumn('Gestion', options=['3rd party','Brand-managed','Owner-operated']),
+        'Meeting (m2)'  : st.column_config.NumberColumn('Meeting m2', min_value=0, format='%d'),
+    }
+    if dea.has_chambres:
+        _col_cfg['Capacité (chambres)'] = st.column_config.NumberColumn(
+            'Chambres', min_value=0, format='%d',
+            help="Nombre de chambres réel, fourni via l'enrichissement.")
     _cs = st.data_editor(
         st.session_state['compset_profile'], use_container_width=True,
-        column_config={
-            'Capacité (chambres)': st.column_config.NumberColumn('Chambres', min_value=0, format='%d',
-                                help="Capacité en lits (nb_chambres) — pas un nombre de chambres."),
-            'Annee ouv.'    : st.column_config.NumberColumn('Annee ouv.', min_value=1800, max_value=2030, format='%d'),
-            'Dern. renov.'  : st.column_config.NumberColumn('Dern. renov.', min_value=1800, max_value=2030, format='%d'),
-            'Classement (e)': st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
-            'Affiliation'   : st.column_config.SelectboxColumn('Affiliation', options=['Independant','Franchise','Mgmt contract','Owner-operated']),
-            'Localisation'  : st.column_config.SelectboxColumn('Localisation', options=['Centre-ville','Suburban','Airport','Resort','Route']),
-            'Gestion'       : st.column_config.SelectboxColumn('Gestion', options=['3rd party','Brand-managed','Owner-operated']),
-            'Meeting (m2)'  : st.column_config.NumberColumn('Meeting m2', min_value=0, format='%d'),
-        }, key='compset_editor',
+        column_config=_col_cfg, key='compset_editor',
     )
     st.session_state['compset_profile'] = _cs
-    _ch_vals = _cs['Capacité (chambres)'].values
-    if _ch_vals.max() > 0 and _ch_vals.min() > 0:
-        _ratio = _ch_vals.max() / _ch_vals.min()
-        if _ratio > 3: st.warning(f'Ratio taille max/min = {_ratio:.1f}x - compset heterogene. Segmenter ou affiner.')
-        else: st.success(f'Homogeneite capacite OK : ratio max/min = {_ratio:.1f}x')
+    if dea.has_chambres:
+        _ch_vals = _cs['Capacité (chambres)'].values
+        if _ch_vals.max() > 0 and _ch_vals.min() > 0:
+            _ratio = _ch_vals.max() / _ch_vals.min()
+            if _ratio > 3: st.warning(f'Ratio taille max/min = {_ratio:.1f}x - compset heterogene. Segmenter ou affiner.')
+            else: st.success(f'Homogeneite capacite OK : ratio max/min = {_ratio:.1f}x')
+    else:
+        st.caption("Homogénéité de taille non vérifiable — nombre de chambres réel non fourni.")
 
     st.markdown("---")
     kpis_def = {
         'RevPAR (€)': (dea.df['revpar'], 'benefit'), 'Satisfaction': (dea.df['satisfaction'], 'benefit'),
         'TO (%)': (dea.df['taux_occupation'], 'benefit'),
-        'ETP / chambre': (dea.df['nb_employes'] / dea.df['nb_chambres'], 'cost'),
-        'CPOR (k€/ch)': (dea.df['couts_op_ex'] / dea.df['nb_chambres'], 'cost'),
         'Score BCC': (pd.Series(dea.bcc_scores), 'benefit'),
     }
+    if dea.has_chambres:
+        kpis_def['ETP / chambre'] = (dea.df['nb_employes'] / dea.df['nb_chambres'], 'cost')
+        kpis_def['CPOR (k€/ch)']  = (dea.df['couts_op_ex'] / dea.df['nb_chambres'], 'cost')
+    else:
+        kpis_def['ETP (total)']   = (dea.df['nb_employes'], 'cost')
+        kpis_def['OpEx (k€)']     = (dea.df['couts_op_ex'], 'cost')
     q_stats = []
     for kpi_name, (series, direction) in kpis_def.items():
         s = series.dropna()
@@ -2931,17 +2980,20 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
                        for h in dea.hotels])
     else:
         # Recalcul si Tab 1 non encore visité
-        bcc_s = pd.Series(dea.bcc_scores); etp_r = dea.df['nb_employes'] / dea.df['nb_chambres']
-        cpor  = dea.df['couts_op_ex'] / dea.df['nb_chambres']
+        bcc_s = pd.Series(dea.bcc_scores)
         dm = pd.DataFrame({
             'DEA BCC': bcc_s, 'RevPAR': dea.df['revpar'], 'Satisfaction': dea.df['satisfaction'],
             'TO%': dea.df['taux_occupation'],
-            'ETP_inv': (1 / etp_r).replace([np.inf], 0), 'CPOR_inv': (1 / cpor).replace([np.inf], 0),
         }, index=dea.hotels).astype(float)
+        if dea.has_chambres:
+            etp_r = dea.df['nb_employes'] / dea.df['nb_chambres']
+            cpor  = dea.df['couts_op_ex'] / dea.df['nb_chambres']
+            dm['ETP_inv']  = (1 / etp_r).replace([np.inf], 0)
+            dm['CPOR_inv'] = (1 / cpor).replace([np.inf], 0)
         cap_inp_tab10 = st.session_state.get('capital_input', None)
-        if cap_inp_tab10 is not None and 'gop (k€)' in cap_inp_tab10.columns:
-            # RevPAR intègre déjà l'occupation — pas de double comptage
-            rev_est = dea.df['revpar'] * 365 * dea.df['nb_chambres']
+        if (cap_inp_tab10 is not None and 'gop (k€)' in cap_inp_tab10.columns
+                and dea.has_trevpar):
+            rev_est = dea.df['total_revenue']
             gop_vals = cap_inp_tab10['gop (k€)'].astype(float) * 1000
             dm['GOP Margin'] = (gop_vals / rev_est.replace(0, np.nan)).fillna(0)
         crit_labels = list(dm.columns); X = dm.values.astype(float); n_dmu, n_crit = X.shape
@@ -3085,8 +3137,9 @@ Réf. : Assaf, Barros & Josiassen (2010) — metafrontière GTE/MTE/TGR.
 # ══════════════════════════════════════════════
 with tab_slacks:
     st.markdown('<p class="section-title">🔥 Slacks — Gaspillages et Potentiels d\'Amélioration</p>', unsafe_allow_html=True)
-    input_names  = ['nb_chambres', 'nb_employes', 'couts_op_ex']
+    input_names  = dea.input_cols
     output_names = ['revpar', 'satisfaction', 'taux_occupation']
+    _input_labels = {'nb_chambres': 'Chambres', 'nb_employes': 'Employés', 'couts_op_ex': 'Coûts Op.'}
     hotels_inefficient = [h for h in dea.hotels if dea.bcc_scores[h] < 0.999]
 
     if not hotels_inefficient:
@@ -3104,7 +3157,7 @@ with tab_slacks:
                     row.append(round(s / cur * 100, 1) if cur > 0 else 0)
                 slack_matrix_in.append(row)
             fig_heat_in = go.Figure(go.Heatmap(
-                z=slack_matrix_in, x=['Chambres', 'Employés', 'Coûts Op.'], y=hotels_inefficient,
+                z=slack_matrix_in, x=[_input_labels.get(c, c) for c in input_names], y=hotels_inefficient,
                 colorscale='Reds',
                 text=[[f"{v:.1f}%" for v in row] for row in slack_matrix_in],
                 texttemplate="%{text}", colorbar=dict(title="%"),
@@ -3135,59 +3188,80 @@ with tab_slacks:
             st.plotly_chart(fig_heat_out, use_container_width=True)
 
         st.markdown('<p class="section-title">Upside Financier Estimé</p>', unsafe_allow_html=True)
-        upside_data = []
-        for h in hotels_inefficient:
-            slack_emp    = dea.slacks[h]['inputs'].get('nb_employes', 0)
-            slack_revpar = dea.slacks[h]['outputs'].get('revpar', 0)
-            lits         = float(dea.df.loc[h, 'nb_chambres'])
-            upside_fte   = round(slack_emp * avg_salary / 1000)
-            upside_rev   = round(slack_revpar * lits * jours_exploit * revpar_value / 1_000_000, 1)
-            upside_data.append({
-                'Hôtel': h, 'Score BCC': f"{dea.bcc_scores[h]:.1%}",
-                'Slack ETP (nb)': round(slack_emp, 1),
-                'Upside ETP (k€/an)': upside_fte,
-                'Slack RevPAR (€)': round(slack_revpar, 1),
-                'Upside RevPAR (M€/an)': upside_rev,
-            })
-        st.dataframe(pd.DataFrame(upside_data), use_container_width=True, hide_index=True)
+        if not dea.has_chambres:
+            st.info(
+                "Upside RevPAR non calculable — nombre de chambres réel non fourni. "
+                "Seul l'upside ETP reste affiché."
+            )
+            upside_data = []
+            for h in hotels_inefficient:
+                slack_emp = dea.slacks[h]['inputs'].get('nb_employes', 0)
+                upside_data.append({
+                    'Hôtel': h, 'Score BCC': f"{dea.bcc_scores[h]:.1%}",
+                    'Slack ETP (nb)': round(slack_emp, 1),
+                    'Upside ETP (k€/an)': round(slack_emp * avg_salary / 1000),
+                })
+            st.dataframe(pd.DataFrame(upside_data), use_container_width=True, hide_index=True)
+        else:
+            upside_data = []
+            for h in hotels_inefficient:
+                slack_emp    = dea.slacks[h]['inputs'].get('nb_employes', 0)
+                slack_revpar = dea.slacks[h]['outputs'].get('revpar', 0)
+                lits         = float(dea.df.loc[h, 'nb_chambres'])
+                upside_fte   = round(slack_emp * avg_salary / 1000)
+                upside_rev   = round(slack_revpar * lits * jours_exploit * revpar_value / 1_000_000, 1)
+                upside_data.append({
+                    'Hôtel': h, 'Score BCC': f"{dea.bcc_scores[h]:.1%}",
+                    'Slack ETP (nb)': round(slack_emp, 1),
+                    'Upside ETP (k€/an)': upside_fte,
+                    'Slack RevPAR (€)': round(slack_revpar, 1),
+                    'Upside RevPAR (M€/an)': upside_rev,
+                })
+            st.dataframe(pd.DataFrame(upside_data), use_container_width=True, hide_index=True)
 
         # PAR / POR / % CA sur les slacks (Russo & Legel, Exhibit 3)
         st.markdown('<p class="section-title">Slacks en metriques USALI (PAR / POR / % CA)</p>', unsafe_allow_html=True)
-        st.caption('PAR = Per Available Room-Night | POR = Per Occupied Room | % CA = % Chiffre Affaires total')
+        if not dea.has_chambres:
+            st.info(
+                "Non calculable : PAR (per available room) et % CA exigent un vrai "
+                "nombre de chambres — non fourni."
+            )
+        else:
+            st.caption('PAR = Per Available Room-Night | POR = Per Occupied Room | % CA = % Chiffre Affaires total')
 
-        par_por_rows = []
-        for h in hotels_inefficient:
-            lits_h   = float(dea.df.loc[h, 'nb_chambres'])
-            revpar_h = float(dea.df.loc[h, 'revpar'])
-            occ_h    = float(dea.df.loc[h, 'taux_occupation']) / 100
-            nights_h = lits_h * jours_exploit * occ_h
-            ca_h     = revpar_h * lits_h * jours_exploit
-            par_h    = lits_h * jours_exploit
+            par_por_rows = []
+            for h in hotels_inefficient:
+                lits_h   = float(dea.df.loc[h, 'nb_chambres'])
+                revpar_h = float(dea.df.loc[h, 'revpar'])
+                occ_h    = float(dea.df.loc[h, 'taux_occupation']) / 100
+                nights_h = lits_h * jours_exploit * occ_h
+                ca_h     = revpar_h * lits_h * jours_exploit
+                par_h    = lits_h * jours_exploit
 
-            s_emp  = dea.slacks[h]['inputs'].get('nb_employes', 0)
-            s_cost = dea.slacks[h]['inputs'].get('couts_op_ex', 0) * 1_000_000
-            s_rev  = dea.slacks[h]['outputs'].get('revpar', 0)
-            val_emp_eur = s_emp * avg_salary
-            val_rev_h   = s_rev * nights_h
+                s_emp  = dea.slacks[h]['inputs'].get('nb_employes', 0)
+                s_cost = dea.slacks[h]['inputs'].get('couts_op_ex', 0) * 1_000_000
+                s_rev  = dea.slacks[h]['outputs'].get('revpar', 0)
+                val_emp_eur = s_emp * avg_salary
+                val_rev_h   = s_rev * nights_h
 
-            par_por_rows.append({
-                'Hôtel'                    : h,
-                'BCC'                      : f"{dea.bcc_scores[h]:.1%}",
-                'Slack ETP (nb)'           : round(s_emp, 1) if s_emp > 0 else '--',
-                'ETP PAR (e/ch dispo)'     : round(val_emp_eur / par_h, 2) if par_h > 0 and s_emp > 0 else '--',
-                'ETP % CA'                 : f"{val_emp_eur / ca_h * 100:.1f}%" if ca_h > 0 and s_emp > 0 else '--',
-                'Couts Op PAR (e)'         : round(s_cost / par_h, 2) if par_h > 0 and s_cost > 0 else '--',
-                'Couts Op % CA'            : f"{s_cost / ca_h * 100:.1f}%" if ca_h > 0 and s_cost > 0 else '--',
-                'Slack RevPAR POR (e/nuit)': round(s_rev, 2) if s_rev > 0 else '--',
-                'Upside Rev brut (ke)'     : round(val_rev_h / 1000, 1) if val_rev_h > 0 else '--',
-            })
+                par_por_rows.append({
+                    'Hôtel'                    : h,
+                    'BCC'                      : f"{dea.bcc_scores[h]:.1%}",
+                    'Slack ETP (nb)'           : round(s_emp, 1) if s_emp > 0 else '--',
+                    'ETP PAR (e/ch dispo)'     : round(val_emp_eur / par_h, 2) if par_h > 0 and s_emp > 0 else '--',
+                    'ETP % CA'                 : f"{val_emp_eur / ca_h * 100:.1f}%" if ca_h > 0 and s_emp > 0 else '--',
+                    'Couts Op PAR (e)'         : round(s_cost / par_h, 2) if par_h > 0 and s_cost > 0 else '--',
+                    'Couts Op % CA'            : f"{s_cost / ca_h * 100:.1f}%" if ca_h > 0 and s_cost > 0 else '--',
+                    'Slack RevPAR POR (e/nuit)': round(s_rev, 2) if s_rev > 0 else '--',
+                    'Upside Rev brut (ke)'     : round(val_rev_h / 1000, 1) if val_rev_h > 0 else '--',
+                })
 
-        if par_por_rows:
-            st.dataframe(pd.DataFrame(par_por_rows), use_container_width=True, hide_index=True)
-            c1p, c2p, c3p = st.columns(3)
-            c1p.info('**PAR** charges fixes, A&G, Maintenance, Utilities')
-            c2p.info('**POR** Rooms dept, F&B, couts variables')
-            c3p.info('**% CA** Management fees, Marketing, Franchise')
+            if par_por_rows:
+                st.dataframe(pd.DataFrame(par_por_rows), use_container_width=True, hide_index=True)
+                c1p, c2p, c3p = st.columns(3)
+                c1p.info('**PAR** charges fixes, A&G, Maintenance, Utilities')
+                c2p.info('**POR** Rooms dept, F&B, couts variables')
+                c3p.info('**% CA** Management fees, Marketing, Franchise')
 
 # ══════════════════════════════════════════════
 # TAB 7 — FICHE ACTIF DRILL-DOWN
@@ -3211,11 +3285,11 @@ with tab_fiche:
     with col_left:
         st.markdown("**📊 Données brutes**")
         raw = dea.df.loc[selected]
-        raw_df = pd.DataFrame({
-            'Indicateur': ['Nombre de chambres', 'Employés', 'Coûts Op. (M€)', 'RevPAR (€)', 'Satisfaction', 'Taux Occup. (%)'],
-            'Valeur': [raw['nb_chambres'], raw['nb_employes'], raw['couts_op_ex'],
-                       raw['revpar'], raw['satisfaction'], raw['taux_occupation']],
-        })
+        _indics, _vals = ['Employés', 'Coûts Op. (M€)', 'RevPAR (€)', 'Satisfaction', 'Taux Occup. (%)'], \
+                          [raw['nb_employes'], raw['couts_op_ex'], raw['revpar'], raw['satisfaction'], raw['taux_occupation']]
+        if dea.has_chambres:
+            _indics.insert(0, 'Nombre de chambres'); _vals.insert(0, raw['nb_chambres'])
+        raw_df = pd.DataFrame({'Indicateur': _indics, 'Valeur': _vals})
         st.dataframe(raw_df, use_container_width=True, hide_index=True)
         st.markdown("**🤝 Hôtels de référence (Peers)**")
         peers = dea.peers.get(selected, {})
@@ -3376,17 +3450,18 @@ with tab_fiche:
     st.markdown("---")
     st.markdown('<p class="section-title">🔒 Plan B — Variables structurellement fixes</p>', unsafe_allow_html=True)
     st.caption(
-        "Certains inputs ne peuvent pas être réduits à court terme (nb_chambres, surface, CAPEX). "
-        "Verrouillez-les : le modèle recalcule les cibles de rattrapage sur les variables "
-        "discrétionnaires restantes. Réf. : Banker & Morey (1986) Management Science."
+        "Certains inputs ne peuvent pas être réduits à court terme (masse salariale fixe, "
+        "charges contractuelles). Verrouillez-les : le modèle recalcule les cibles de "
+        "rattrapage sur les variables discrétionnaires restantes. "
+        "Réf. : Banker & Morey (1986) Management Science."
     )
 
     _nd_fixed = st.multiselect(
         "Variables à verrouiller (non-modifiables)",
         options=dea.input_cols,
-        default=[c for c in ['nb_chambres'] if c in dea.input_cols],
+        default=[],
         key="nd_fixed_cols",
-        help="Ex : nb_chambres (capacité physique), surface_m2 (m² du bâtiment)"
+        help="Ex : couts_op_ex si une part est contractuellement fixe à court terme."
     )
 
     if st.button("🔄 Calculer Plan B", key="nd_btn"):
@@ -3460,10 +3535,6 @@ with tab_fiche:
                 st.dataframe(pd.DataFrame(_out_rows), use_container_width=True, hide_index=True)
 
             st.info(
-                f"**Lecture :** nb_chambres verrouillé à {dea.df.loc[selected, 'nb_chambres']:.0f} lits. "
-                "Pour atteindre la frontière, l'hôtel doit compenser sur les variables discrétionnaires "
-                "ci-dessus. Chaque ligne indique l'effort requis variable par variable."
-                if 'nb_chambres' in _nd_fixed and 'nb_chambres' in dea.df.columns else
                 "Compenser sur les variables discrétionnaires ci-dessus pour atteindre la frontière "
                 "sans modifier les inputs verrouillés."
             )
@@ -3507,7 +3578,8 @@ with tab_fiche:
     )
 
     _wi_raw  = dea.df.loc[selected]
-    _wi_lits = float(_wi_raw['nb_chambres'])
+    _wi_has_ch = dea.has_chambres
+    _wi_lits = float(_wi_raw['nb_chambres']) if _wi_has_ch else None
     _wi_emp  = float(_wi_raw['nb_employes'])
     _wi_opex = float(_wi_raw['couts_op_ex'])
     _wi_rvp  = float(_wi_raw['revpar'])
@@ -3518,13 +3590,16 @@ with tab_fiche:
     _wi_col1, _wi_col2 = st.columns(2)
     with _wi_col1:
         st.markdown("**📥 Inputs (ressources)**")
-        _wi_new_lits = st.slider(
-            "Nombre de chambres", 
-            min_value=max(10,  int(_wi_lits * 0.5)),
-            max_value=int(_wi_lits * 1.5),
-            value=int(_wi_lits),
-            step=5, key="wi_lits"
-        )
+        if _wi_has_ch:
+            _wi_new_lits = st.slider(
+                "Nombre de chambres", 
+                min_value=max(10,  int(_wi_lits * 0.5)),
+                max_value=int(_wi_lits * 1.5),
+                value=int(_wi_lits),
+                step=5, key="wi_lits"
+            )
+        else:
+            _wi_new_lits = None
         _wi_new_emp = st.slider(
             "Nombre d'ETP",
             min_value=max(5,   int(_wi_emp  * 0.5)),
@@ -3566,13 +3641,14 @@ with tab_fiche:
 
     # Visualisation immédiate des écarts vs valeurs actuelles (Option C)
     _wi_changes = {
-        "Lits"   : (_wi_lits, _wi_new_lits,  "↓ moins = mieux"),
         "ETP"    : (_wi_emp,  _wi_new_emp,   "↓ moins = mieux"),
         "OpEx"   : (_wi_opex, _wi_new_opex,  "↓ moins = mieux"),
         "RevPAR" : (_wi_rvp,  _wi_new_rvp,   "↑ plus = mieux"),
         "Sat."   : (_wi_sat,  _wi_new_sat,   "↑ plus = mieux"),
         "TO"     : (_wi_occ,  _wi_new_occ,   "↑ plus = mieux"),
     }
+    if _wi_has_ch:
+        _wi_changes = {"Lits": (_wi_lits, _wi_new_lits, "↓ moins = mieux"), **_wi_changes}
     _wi_deltas = []
     for _k, (old, new, _) in _wi_changes.items():
         if old > 0:
@@ -3629,15 +3705,16 @@ with tab_fiche:
                 # Modifier le DataFrame uniquement pour l'hôtel sélectionné
                 import pulp as _pulp
                 _df_mod = dea.df.copy()
-                _df_mod.loc[selected, 'nb_chambres']       = _wi_new_lits
+                if _wi_has_ch:
+                    _df_mod.loc[selected, 'nb_chambres']   = _wi_new_lits
                 _df_mod.loc[selected, 'nb_employes']   = _wi_new_emp
                 _df_mod.loc[selected, 'couts_op_ex']   = _wi_new_opex
                 _df_mod.loc[selected, 'revpar']        = _wi_new_rvp
                 _df_mod.loc[selected, 'satisfaction']  = _wi_new_sat
                 _df_mod.loc[selected, 'taux_occupation'] = _wi_new_occ
 
-                _wi_inputs_mat  = _df_mod[['nb_chambres','nb_employes','couts_op_ex']].values.astype(float)
-                _wi_outputs_mat = _df_mod[['revpar','satisfaction','taux_occupation']].values.astype(float)
+                _wi_inputs_mat  = _df_mod[dea.input_cols].values.astype(float)
+                _wi_outputs_mat = _df_mod[dea.output_cols].values.astype(float)
                 _wi_hotels      = _df_mod.index.tolist()
                 _wi_n           = len(_wi_hotels)
                 _wi_idx         = _wi_hotels.index(selected)
@@ -3812,26 +3889,36 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
         "inter-groupes (Assaf et al. 2010). Si votre compset est homogène, tous les hôtels "
         "appartiennent au même groupe — GTE = MTE pour tous, sans impact sur les scores."
     )
-    seg_options = {'🏠 Taille (auto depuis nb_chambres)': 'taille'}
+    seg_options = {}
+    if dea.has_chambres:
+        seg_options['🏠 Taille (auto depuis nb_chambres)'] = 'taille'
     if 'type_gestion' in dea.df.columns:
         seg_options['⚙️ Type de gestion (indépendant/chaîne)'] = 'type_gestion'
     if 'classement_etoiles' in dea.df.columns:
         seg_options['⭐ Classement étoiles (1★ → 5★)'] = 'classement_etoiles'
 
-    seg_label = st.selectbox(
-        "Dimension de segmentation",
-        options=list(seg_options.keys()),
-        help="Choisir la dimension qui définit les groupes homogènes dans votre compset. "
-             "Réf. : Assaf, Barros & Josiassen (2010) — metafrontière bootstrappée."
-    )
-    seg_key = seg_options[seg_label]
-    groups = dea.get_auto_size_groups() if seg_key == 'taille' else dea.df[seg_key].rename('groupe')
-    with st.spinner("Calcul GTE / MTE / TGR…"):
-        meta_df  = dea.compute_metafrontier(groups)
-        meta_sum = dea.get_metafrontier_summary(meta_df)
-    warns = [w for w in meta_df['_warn'].dropna().unique() if w]
-    for w in warns:
-        st.warning(w)
+    if not seg_options:
+        st.warning(
+            "Aucune dimension de segmentation disponible — ni nombre de chambres "
+            "réel, ni type de gestion, ni classement étoiles dans le fichier. "
+            "La métafrontière ne peut pas être calculée sans au moins une de "
+            "ces colonnes."
+        )
+    else:
+        seg_label = st.selectbox(
+            "Dimension de segmentation",
+            options=list(seg_options.keys()),
+            help="Choisir la dimension qui définit les groupes homogènes dans votre compset. "
+                 "Réf. : Assaf, Barros & Josiassen (2010) — metafrontière bootstrappée."
+        )
+        seg_key = seg_options[seg_label]
+        groups = dea.get_auto_size_groups() if seg_key == 'taille' else dea.df[seg_key].rename('groupe')
+        with st.spinner("Calcul GTE / MTE / TGR…"):
+            meta_df  = dea.compute_metafrontier(groups)
+            meta_sum = dea.get_metafrontier_summary(meta_df)
+        warns = [w for w in meta_df['_warn'].dropna().unique() if w]
+        for w in warns:
+            st.warning(w)
     st.dataframe(meta_sum, use_container_width=True, hide_index=True)
     display_cols = ['Hôtel', 'Groupe', 'GTE', 'MTE', 'TGR', 'Interprétation']
     st.dataframe(meta_df[display_cols].sort_values('TGR'), use_container_width=True, hide_index=True)
@@ -3954,27 +4041,33 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
     st.caption("Assaf et al. (2009) Table 2 — Market share intra-compset | Guests/ETP = nb nuitées / ETP (productivité travail).")
 
     _enr_df = dea.compute_enriched_kpis()
-    st.dataframe(_enr_df, use_container_width=True, hide_index=True)
+    if _enr_df is None:
+        st.warning(
+            "Non calculable : nuitées, CA estimé, market share et Guests/ETP exigent un "
+            "vrai nombre de chambres — absent ou non fourni via l'enrichissement."
+        )
+    else:
+        st.dataframe(_enr_df, use_container_width=True, hide_index=True)
 
-    # Scatter market share vs BCC
-    _enr_bcc = [dea.bcc_scores.get(h, 0) for h in _enr_df['Hôtel']]
-    fig_ms = go.Figure()
-    for i, h in enumerate(_enr_df['Hôtel']):
-        _ms = _enr_df.iloc[i]['Market share (%)']
-        _bcc = _enr_bcc[i]
-        _color = '#27ae60' if _bcc >= 0.90 else '#f39c12' if _bcc >= 0.80 else '#e74c3c'
-        fig_ms.add_trace(go.Scatter(
-            x=[_ms], y=[_bcc], mode='markers+text', text=[h],
-            textposition='top center', textfont=dict(size=8),
-            marker=dict(size=10, color=_color), showlegend=False,
-        ))
-    fig_ms.update_layout(
-        title="Market Share intra-compset vs Efficience BCC (Assaf et al. 2009)",
-        xaxis=dict(title="Market Share (%)"),
-        yaxis=dict(title="Score BCC", tickformat='.0%', range=[0.3, 1.08]),
-        height=400, paper_bgcolor='rgba(0,0,0,0)',
-    )
-    st.plotly_chart(fig_ms, use_container_width=True)
+        # Scatter market share vs BCC
+        _enr_bcc = [dea.bcc_scores.get(h, 0) for h in _enr_df['Hôtel']]
+        fig_ms = go.Figure()
+        for i, h in enumerate(_enr_df['Hôtel']):
+            _ms = _enr_df.iloc[i]['Market share (%)']
+            _bcc = _enr_bcc[i]
+            _color = '#27ae60' if _bcc >= 0.90 else '#f39c12' if _bcc >= 0.80 else '#e74c3c'
+            fig_ms.add_trace(go.Scatter(
+                x=[_ms], y=[_bcc], mode='markers+text', text=[h],
+                textposition='top center', textfont=dict(size=8),
+                marker=dict(size=10, color=_color), showlegend=False,
+            ))
+        fig_ms.update_layout(
+            title="Market Share intra-compset vs Efficience BCC (Assaf et al. 2009)",
+            xaxis=dict(title="Market Share (%)"),
+            yaxis=dict(title="Score BCC", tickformat='.0%', range=[0.3, 1.08]),
+            height=400, paper_bgcolor='rgba(0,0,0,0)',
+        )
+        st.plotly_chart(fig_ms, use_container_width=True)
 
 
 
@@ -4177,24 +4270,28 @@ with tab_capital:
             row      = cap_input.loc[hotel]
             surf     = float(row['surface_m2']); capex_ke = float(row['capex_annuel (k€)'])
             gop_ke   = float(row['gop (k€)']);   stars    = int(row['classement (★)'])
-            lits     = float(dea.df.loc[hotel, 'nb_chambres']); revpar = float(dea.df.loc[hotel, 'revpar'])
-            to       = float(dea.df.loc[hotel, 'taux_occupation']) / 100
+            lits = float(dea.df.loc[hotel, 'nb_chambres']) if dea.has_chambres else None
             goppam   = round(gop_ke * 1000 / surf, 2)    if surf > 0    else None
-            capex_ch = round(capex_ke * 1000 / lits, 0)  if lits > 0    else None
-            # CA = RevPAR × lits disponibles × jours.
-            # Ne PAS multiplier par le taux d'occupation : RevPAR = ADR × OCC
-            # l'intègre déjà (HOST/USALI ; Kimes 1989). Multiplier à nouveau
-            # sous-estimait le CA d'environ 25 %.
-            rev_est  = revpar * jours_exploit * lits
-            rendement= round(rev_est / (capex_ke * 1000), 2) if capex_ke > 0 else None
+            capex_ch = round(capex_ke * 1000 / lits, 0)  if lits else None
+            # CA : exige un vrai nombre de chambres ou un total_revenue réel —
+            # plus de repli automatique, cf. audit portefeuille Ibis Atream
+            # (rapport chambres/lits de 1:1 à 7:1 selon l'hôtel).
+            if dea.has_trevpar:
+                rev_est = float(dea.df.loc[hotel, 'total_revenue'])
+            elif lits:
+                revpar = float(dea.df.loc[hotel, 'revpar'])
+                rev_est  = revpar * jours_exploit * lits
+            else:
+                rev_est = None
+            rendement= round(rev_est / (capex_ke * 1000), 2) if (rev_est and capex_ke > 0) else None
             ft       = ft_pct
             slack_r  = dea.slacks.get(hotel, {}).get('outputs', {}).get('revpar', 0)
-            up_gop   = round(slack_r * lits * jours_exploit * ft / 1_000_000, 3) if slack_r > 0 else 0
-            gop_margin = round(gop_ke * 1000 / rev_est * 100, 1) if gop_ke > 0 and rev_est > 0 else None
+            up_gop   = round(slack_r * lits * jours_exploit * ft / 1_000_000, 3) if (slack_r > 0 and lits) else 0
+            gop_margin = round(gop_ke * 1000 / rev_est * 100, 1) if (gop_ke > 0 and rev_est) else None
             cap_rows.append({
                 'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel, 0):.1%}", 'Classement': '★' * stars,
                 'Surface (m²)': int(surf) if surf > 0 else '—',
-                'm²/chambre': round(surf/lits,1) if surf>0 and lits>0 else '—',
+                'm²/chambre': round(surf/lits,1) if surf>0 and lits else '—',
                 'CAPEX/chambre (k€)': round(capex_ch/1000,1) if capex_ch else '—',
                 'Rendement CAPEX (x)': rendement if rendement else '—',
                 'GOP (k€)': gop_ke if gop_ke > 0 else '—',
@@ -4291,27 +4388,30 @@ with tab_capital:
                 st.plotly_chart(fig_gop, use_container_width=True)
     
         st.markdown("---")
-        upside_rows = []
-        for r in cap_rows:
-            hotel  = r['Hôtel']
-            ft     = ft_pct
-            slk_r  = dea.slacks.get(hotel,{}).get('outputs',{}).get('revpar', 0)
-            lits   = float(dea.df.loc[hotel, 'nb_chambres'])
-            up_rev = round(slk_r * lits * 365 / 1_000_000, 3)
-            up_gop = round(up_rev * ft, 3)
-            upside_rows.append({
-                'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel,0):.1%}",
-                'Classement': '★' * stars, 'FT% benchmark': f"{ft:.0%}",
-                'Slack RevPAR (€)': round(slk_r,1) if slk_r > 0 else '—',
-                'Upside Revenu brut (M€)': up_rev if up_rev > 0 else '—',
-                'Upside GOP /FT (M€)': up_gop if up_gop > 0 else '—',
-                'Priorité': ('🔴 Urgent' if up_gop>1.5 else '🟡 Moyen' if up_gop>0.5
-                             else '✅ RAS' if up_gop==0 else '🟢 Faible'),
-            })
-        upside_df = pd.DataFrame(upside_rows)
-        upside_df['_sort'] = pd.to_numeric(upside_df['Upside GOP /FT (M€)'], errors='coerce')
-        upside_df = upside_df.sort_values('_sort', ascending=False, na_position='last').drop(columns=['_sort'])
-        st.dataframe(upside_df, use_container_width=True, hide_index=True)
+        if not dea.has_chambres:
+            st.info("Upside Revenu/GOP par hôtel non calculable — nombre de chambres réel non fourni.")
+        else:
+            upside_rows = []
+            for r in cap_rows:
+                hotel  = r['Hôtel']
+                ft     = ft_pct
+                slk_r  = dea.slacks.get(hotel,{}).get('outputs',{}).get('revpar', 0)
+                lits   = float(dea.df.loc[hotel, 'nb_chambres'])
+                up_rev = round(slk_r * lits * 365 / 1_000_000, 3)
+                up_gop = round(up_rev * ft, 3)
+                upside_rows.append({
+                    'Hôtel': hotel, 'BCC': f"{dea.bcc_scores.get(hotel,0):.1%}",
+                    'Classement': '★' * stars, 'FT% benchmark': f"{ft:.0%}",
+                    'Slack RevPAR (€)': round(slk_r,1) if slk_r > 0 else '—',
+                    'Upside Revenu brut (M€)': up_rev if up_rev > 0 else '—',
+                    'Upside GOP /FT (M€)': up_gop if up_gop > 0 else '—',
+                    'Priorité': ('🔴 Urgent' if up_gop>1.5 else '🟡 Moyen' if up_gop>0.5
+                                 else '✅ RAS' if up_gop==0 else '🟢 Faible'),
+                })
+            upside_df = pd.DataFrame(upside_rows)
+            upside_df['_sort'] = pd.to_numeric(upside_df['Upside GOP /FT (M€)'], errors='coerce')
+            upside_df = upside_df.sort_values('_sort', ascending=False, na_position='last').drop(columns=['_sort'])
+            st.dataframe(upside_df, use_container_width=True, hide_index=True)
     
     
         # ── DEA Capital vs DEA Opérationnel ─────────────────────────────────
@@ -4540,7 +4640,10 @@ with tab_capital:
                 base_gop_pct_ft = st.number_input('Marge GOP% baseline (%)', value=35.0, step=0.5, key='ft_gop')
 
         flex_rows = []
-        for r in cap_rows:
+        if not dea.has_chambres:
+            st.info("Flow Through par hôtel non calculable — nombre de chambres réel non fourni.")
+        else:
+          for r in cap_rows:
             hotel_ft = r['Hôtel']
             stars_ft = int(cap_input.loc[hotel_ft, 'classement (★)']) if 'classement (★)' in cap_input.columns and hotel_ft in cap_input.index else 3
             ft_bench_ft = ft_pct
@@ -4613,13 +4716,13 @@ with tab_malm:
     # Vérifier colonnes N-1
     _n1_present = has_n1_cols(dea.df)
     _n1_required = ["revpar_n1", "nb_employes_n1", "couts_op_ex_n1",
-                    "taux_occupation_n1", "nb_chambres_n1"]
+                    "taux_occupation_n1"]
     _n1_missing  = [c for c in _n1_required if c not in dea.df.columns]
 
     if _n1_missing:
         _warn_msg = (
             f"Colonnes N-1 manquantes : {', '.join(_n1_missing)}. "
-            "Ajoutez nb_chambres_n1, nb_employes_n1, couts_op_ex_n1, "
+            "Ajoutez nb_employes_n1, couts_op_ex_n1, "
             "revpar_n1, taux_occupation_n1 (+ satisfaction_n1 optionnel) "
             "a votre CSV pour activer le Malmquist."
         )
@@ -4831,7 +4934,7 @@ with tab_malm:
         # Structurelles
         'classement_etoiles': 'Classement (★)',
         'nb_chambres'           : 'Nombre de chambres',
-        'log_nb_chambres'       : 'Taille — log(nb lits)',
+        'log_nb_chambres'       : 'Taille — log(chambres)',
         'surface_m2'        : 'Surface totale (m²)',
         # Financières — Pulina & Santoni (2018)
         'ltv_proxy'         : 'Intensité capital / CA (proxy LTV %)',
@@ -5119,7 +5222,7 @@ sont automatiquement mappées vers les noms standard des modules.*
     st.markdown("---")
     st.markdown('<p class="section-title">📥 Rapport Portfolio PDF</p>', unsafe_allow_html=True)
     st.caption(
-        "Document de comité d'investissement — 13 sections. Chaque section comprend "
+        "Document de comité d'investissement — 12 sections. Chaque section comprend "
         "la méthode, un tableau et une lecture investisseur interprétant vos chiffres. "
         "Le rapport s'adapte automatiquement au portefeuille chargé : variables, "
         "nombre d'actifs et données disponibles."
@@ -5196,7 +5299,7 @@ sont automatiquement mappées vers les noms standard des modules.*
             )
             st.markdown("---")
             st.markdown(
-                f"**Pour atteindre 13/13** — votre fichier couvre {_ready} sections. "
+                f"**Pour atteindre 12/12** — votre fichier couvre {_ready} sections. "
                 "Les colonnes suivantes débloquent les autres :"
             )
             _MANQUE = []
@@ -5208,7 +5311,7 @@ sont automatiquement mappées vers les noms standard des modules.*
                 _MANQUE += [("revpar_n1", "RevPAR de l'exercice précédent (€)",       "11"),
                             ("gop_n1",    "GOP de l'exercice précédent (k€)",         "11")]
             if not _has_n1:
-                _MANQUE += [("nb_chambres_n1/ nb_employes_n1 / couts_op_ex_n1 / taux_occupation_n1",
+                _MANQUE += [("nb_employes_n1 / couts_op_ex_n1 / revpar_n1 / taux_occupation_n1",
                              "Jeu complet de l'exercice précédent", "12")]
             if not _has_sw:
                 _MANQUE += [("classement_etoiles, saison_dummy, energy_kwh…",
@@ -5292,7 +5395,7 @@ sont automatiquement mappées vers les noms standard des modules.*
             if _meta:
                 st.caption(
                     f"Généré le {_meta.get('ts','—')} · {_meta.get('ko','—')} Ko · "
-                    f"{_meta.get('sections','—')}/13 sections alimentées"
+                    f"{_meta.get('sections','—')}/12 sections alimentées"
                 )
 
 
@@ -5306,12 +5409,15 @@ with tab_budget:
     st.caption('Russo & Legel Exhibit 6 : N-1 / Budget / Realise en PAR (Per Available Room), POR (Per Occupied Room), % CA')
 
     sel_var = st.selectbox('Actif a analyser', options=dea.hotels, key='var_hotel_sel')
-    lits_v  = float(dea.df.loc[sel_var, 'nb_chambres'])
-    occ_v   = float(dea.df.loc[sel_var, 'taux_occupation']) / 100
-    revpar_v= float(dea.df.loc[sel_var, 'revpar'])
-    nights_v= lits_v * 365 * occ_v
-    par_v   = lits_v * 365
-    ca_v    = revpar_v * lits_v * 365
+    if dea.has_chambres:
+        lits_v  = float(dea.df.loc[sel_var, 'nb_chambres'])
+        occ_v   = float(dea.df.loc[sel_var, 'taux_occupation']) / 100
+        revpar_v= float(dea.df.loc[sel_var, 'revpar'])
+        nights_v= lits_v * 365 * occ_v
+        par_v   = lits_v * 365
+        ca_v    = revpar_v * lits_v * 365
+    else:
+        lits_v = nights_v = par_v = ca_v = None
 
     USALI_ITEMS = [
         ('Rooms Revenue', 'POR'),
@@ -5355,7 +5461,11 @@ with tab_budget:
     # Variances
     st.markdown('---')
     st.markdown('<p class="section-title">Tableau de Variance PAR / POR / % CA</p>', unsafe_allow_html=True)
-    st.caption(f'PAR base = {par_v:,.0f} room-nights | POR base = {nights_v:,.0f} nuitees | CA ref = {ca_v:,.0f} euros')
+    st.caption(
+        f'PAR base = {par_v:,.0f} room-nights | POR base = {nights_v:,.0f} nuitees | CA ref = {ca_v:,.0f} euros'
+        if dea.has_chambres else
+        'PAR/POR non calculables — nombre de chambres réel non fourni. Colonnes € brutes disponibles ci-dessous.'
+    )
 
     _vres = []
     for _, row_v in _edited.iterrows():
@@ -5368,8 +5478,10 @@ with tab_budget:
         pct_b = var_b / abs(bud_v) * 100 if bud_v != 0 else 0
         pct_n1= var_n1/ abs(n1_v)  * 100 if n1_v  != 0 else 0
 
-        base_v = par_v if mt_v=='PAR' else nights_v if mt_v=='POR' else ca_v
-        def _fmt(v): return f'{v/base_v*100:.1f}%' if mt_v=='% CA' and base_v>0 else (f'{v/base_v:.2f}' if base_v>0 else '--')
+        base_v = (par_v if mt_v=='PAR' else nights_v if mt_v=='POR' else ca_v) if dea.has_chambres else None
+        def _fmt(v):
+            if base_v is None: return '--'
+            return f'{v/base_v*100:.1f}%' if mt_v=='% CA' and base_v>0 else (f'{v/base_v:.2f}' if base_v>0 else '--')
 
         _vres.append({
             'Poste'          : ln_v,
