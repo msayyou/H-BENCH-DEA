@@ -16,7 +16,6 @@ from scipy import stats, optimize
 # ══════════════════════════════════════════════════════════════════════════════
 
 _N1_COLS = {
-    'nb_lits'         : 'nb_lits_n1',
     'nb_employes'     : 'nb_employes_n1',
     'couts_op_ex'     : 'couts_op_ex_n1',
     'revpar'          : 'revpar_n1',
@@ -56,7 +55,7 @@ def compute_malmquist(dea) -> pd.DataFrame | None:
     Calcule l'indice de productivité de Malmquist pour chaque DMU.
 
     Nécessite dans dea.df les colonnes _n1 :
-      nb_lits_n1, nb_employes_n1, couts_op_ex_n1,
+      nb_employes_n1, couts_op_ex_n1,
       revpar_n1, taux_occupation_n1 (+ satisfaction_n1 optionnel)
 
     Décomposition (Färe et al. 1994) :
@@ -75,7 +74,7 @@ def compute_malmquist(dea) -> pd.DataFrame | None:
     if missing:
         return None
 
-    input_cols  = ['nb_lits', 'nb_employes', 'couts_op_ex']
+    input_cols  = ['nb_employes', 'couts_op_ex']
     output_cols = ['revpar', 'taux_occupation']
     if 'satisfaction_n1' in df.columns:
         output_cols.append('satisfaction')
@@ -214,10 +213,19 @@ def compute_tobit(
     X_raw = np.column_stack([dea.df.loc[valid, c].values.astype(float)
                              for c in env_vars])
 
-    # Normalisation des régresseurs (meilleure convergence)
+    # Rejeter les régresseurs constants — même raisonnement que Simar-Wilson
+    # ci-dessous : un écart-type nul rend le coefficient non identifié.
     X_means = X_raw.mean(axis=0)
     X_stds  = X_raw.std(axis=0)
-    X_stds[X_stds == 0] = 1.0
+    _const_vars = [env_vars[i] for i in range(len(env_vars)) if X_stds[i] == 0]
+    if _const_vars:
+        _const_labels = [ (env_labels or {}).get(v, v) for v in _const_vars]
+        return {'error': (
+            f"Variable(s) constante(s) sur l'échantillon (aucune variance à expliquer) : "
+            f"{', '.join(_const_labels)}. Retirez-la(les) de la sélection."
+        )}
+
+    # Normalisation des régresseurs (meilleure convergence)
     X_norm  = (X_raw - X_means) / X_stds
     X_fit   = np.column_stack([np.ones(len(valid)), X_norm])
 
@@ -304,7 +312,7 @@ def compute_tobit(
 MDEA_COL_MAP = {
     # Division Rooms
     'room': {
-        'inputs' : ['rooms_cost', 'nb_lits'],
+        'inputs' : ['rooms_cost'],
         'outputs': ['rooms_revenue'],
         'label'  : 'Hébergement (Rooms)',
     },
@@ -348,7 +356,7 @@ def compute_mdea_room_fb(dea) -> dict:
     L'écart entre BCC Room et BCC F&B localise la source d'inefficience
     — réplication simplifiée de la décomposition MDEA/GAR (Yu 2012, Eq. 3-6).
     
-    Inputs Room  : rooms_cost + nb_lits
+    Inputs Room  : rooms_cost
     Inputs F&B   : fb_cost (+ fb_area si disponible)
     Outputs Room : rooms_revenue
     Outputs F&B  : fb_revenue
@@ -552,9 +560,9 @@ def build_stage2_vars(dea) -> list:
     Variables ajoutées :
       ltv_proxy      : CAPEX annuel / CA total × 100  — intensité capital (proxy LTV)
       asset_yield    : CA total / Book value assets    — rendement actifs (proxy ROA)
-      capex_per_room : CAPEX annuel / nb_lits          — CAPEX par chambre (k€)
+      capex_per_room : CAPEX annuel / nb_chambres          — CAPEX par chambre (k€)
       gop_margin_pct : GOP / CA total × 100            — marge opérationnelle
-      log_nb_lits    : log(nb_lits)                   — effet taille (log-linéaire)
+      log_nb_chambres    : log(nb_chambres)                   — effet taille (log-linéaire)
 
     Réf. : Pulina & Santoni (2018) Tourism Economics
            Simar & Wilson (2007) Journal of Econometrics
@@ -575,8 +583,8 @@ def build_stage2_vars(dea) -> list:
         added.append('asset_yield')
 
     # 3. CAPEX par chambre
-    if 'capex_annuel' in df.columns and 'nb_lits' in df.columns:
-        _lits = df['nb_lits'].replace(0, np.nan)
+    if 'capex_annuel' in df.columns and 'nb_chambres' in df.columns:
+        _lits = df['nb_chambres'].replace(0, np.nan)
         df['capex_per_room'] = (df['capex_annuel'] / _lits).round(2)
         added.append('capex_per_room')
 
@@ -587,9 +595,9 @@ def build_stage2_vars(dea) -> list:
         added.append('gop_margin_pct')
 
     # 5. Log taille
-    if 'nb_lits' in df.columns:
-        df['log_nb_lits'] = np.log(df['nb_lits'].replace(0, np.nan).astype(float)).round(4)
-        added.append('log_nb_lits')
+    if 'nb_chambres' in df.columns:
+        df['log_nb_chambres'] = np.log(df['nb_chambres'].replace(0, np.nan).astype(float)).round(4)
+        added.append('log_nb_chambres')
 
     return added
 
@@ -681,9 +689,25 @@ def compute_simar_wilson(
     Z_raw = np.column_stack([dea.df.loc[valid, c].values.astype(float)
                              for c in env_vars])
 
-    # Normalisation
+    # Rejeter les régresseurs constants — un écart-type nul rend le
+    # coefficient non identifié par les données (la colonne normalisée
+    # devient une suite de zéros, sans contenu informatif). Sans ce
+    # contrôle, l'ancien code masquait le problème en remplaçant l'écart-type
+    # nul par 1.0, produisant un coefficient/IC/p-value d'apparence légitime
+    # mais purement artefactuel — ex. une variable de localisation identique
+    # pour tous les hôtels du portefeuille (grille jamais modifiée).
     Z_means = Z_raw.mean(axis=0);  Z_stds = Z_raw.std(axis=0)
-    Z_stds[Z_stds == 0] = 1.0
+    _const_vars = [env_vars[i] for i in range(len(env_vars)) if Z_stds[i] == 0]
+    if _const_vars:
+        _const_labels = [env_labels.get(v, v) for v in _const_vars]
+        return {'error': (
+            f"Variable(s) constante(s) sur l'échantillon (aucune variance à expliquer) : "
+            f"{', '.join(_const_labels)}. Retirez-la(les) de la sélection — un coefficient "
+            f"estimé dessus ne serait pas identifié par les données, quel que soit le chiffre "
+            f"que produirait le solveur."
+        )}
+
+    # Normalisation
     Z_norm = (Z_raw - Z_means) / Z_stds
     Z_fit  = np.column_stack([np.ones(len(valid)), Z_norm])
 
