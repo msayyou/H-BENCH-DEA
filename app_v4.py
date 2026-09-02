@@ -278,7 +278,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                                   ft_pct: float = 0.50,
                                   avg_salary: float = 35_000,
                                   portfolio_name: str = "",
-                                  thresholds: dict = None) -> bytes:
+                                  thresholds: dict = None,
+                                  module_results: dict = None) -> bytes:
     """
     Rapport PDF portfolio — document de comité d'investissement.
 
@@ -286,7 +287,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
     SBM (Tone 2001), Super-Efficience (Andersen & Petersen 1993),
     Slacks (Barros 2005), Métafrontière (O'Donnell et al. 2008),
     Simar-Wilson (2007), Efficience Capital, DEA Capital vs Opérationnel,
-    Expense Flex & Flow Through (Russo & Legel).
+    Expense Flex & Flow Through (Russo & Legel), Diagnostic croisé
+    Opérationnel × Financier × Commercial × RH avec plan d'action.
     """
     if not REPORTLAB_AVAILABLE:
         return b""
@@ -1337,6 +1339,80 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                 story.append(_lecture(_txt))
     except Exception as _e:
         story.append(Paragraph(f"Malmquist non calculable ({_clean(_e, 90)}).", body_s))
+
+    # ══════════════════ DIAGNOSTIC CROISÉ MULTI-DIMENSIONS ══════════════════
+    story.append(PageBreak())
+    story.append(Paragraph("13. Diagnostic croisé — Opérationnel × Financier × Commercial × RH", h1_s))
+    story.append(Paragraph(
+        "Le score BCC (sections 1 à 12) compare chaque hôtel à ses pairs sur chambres, "
+        "ETP et charges opérationnelles — il indique QUI sous-performe, pas POURQUOI. "
+        "Cette section croise le diagnostic opérationnel avec les modules Financier, "
+        "Commercial/Revenue Management et RH quand des données réelles sont disponibles, "
+        "pour distinguer un problème managérial ciblé d'un problème structurel touchant "
+        "plusieurs fonctions à la fois.", meth_s))
+
+    _dim_modules_pdf = {
+        'financial_usali'   : ('💰 Financier', "Renégocier la structure de coûts départementaux "
+                                "(Rooms/F&B), réduire les charges non distribuées, revoir les "
+                                "contrats fournisseurs sur le poste identifié comme faible."),
+        'revenue_management': ('📈 Commercial / Revenue Mgmt', "Revoir la stratégie de "
+                                "distribution (dépendance OTA/GDS), renégocier les commissions "
+                                "canal, ajuster l'équilibre tarif/occupation (ADR vs TO)."),
+        'workforce'          : ('👥 Ressources Humaines', "Revoir la productivité du travail "
+                                "(ratio ETP/activité), la formation, l'organisation des équipes "
+                                "sur les postes identifiés comme faibles."),
+    }
+    _mr = module_results or {}
+    _dim_scores_pdf = {}
+    for _mid, (_lbl, _sol) in _dim_modules_pdf.items():
+        _res = _mr.get(_mid)
+        if _res is not None and not getattr(_res, 'error', None) and not _res.scores.empty:
+            _dim_scores_pdf[_lbl] = (dict(zip(_res.scores['dmu_name'], _res.scores['efficiency'])), _sol)
+
+    if not _dim_scores_pdf:
+        story.append(Paragraph(
+            "Non calculable : aucun module Financier / Commercial / RH actif avec de "
+            "vraies données au moment de la génération. Le diagnostic reste limité à "
+            "la dimension opérationnelle (sections 1 à 12) tant que ces données ne "
+            "sont pas fournies via l'enrichissement.", body_s))
+    else:
+        _diag_rows_pdf = []
+        for h in dea.hotels:
+            _bcc_h = dea.bcc_scores.get(h, 1.0)
+            if _bcc_h >= _TH['crit']:
+                continue
+            _weak = [(lbl, sol) for lbl, (sc, sol) in _dim_scores_pdf.items()
+                     if sc.get(h) is not None and sc[h] < _TH['crit']]
+            if _weak:
+                _diag_rows_pdf.append((h, _bcc_h, _weak))
+
+        if not _diag_rows_pdf:
+            story.append(Paragraph(
+                "Les hôtels critiques en BCC ne montrent pas de faiblesse identifiable "
+                "sur les autres dimensions actives — la sous-performance semble "
+                "d'origine purement opérationnelle (voir Slacks, section 6).", body_s))
+        else:
+            _n_multi_pdf = sum(1 for _, _, w in _diag_rows_pdf if len(w) >= 2)
+            dd = [["Hôtel", "BCC", "Dimensions en cause", "Plan d'action"]]
+            for h, bcc_h, weak in _diag_rows_pdf[:12]:
+                dd.append([_clean(h, 34), f"{bcc_h:.1%}",
+                          _clean(", ".join(l.split(" ", 1)[-1] for l, _ in weak), 30),
+                          _clean(" | ".join(s for _, s in weak), 70)])
+            story.append(_tbl(dd, [4.3*cm, 1.4*cm, 4.0*cm, 7.6*cm]))
+            if len(_diag_rows_pdf) > 12:
+                story.append(Paragraph(
+                    f"Tableau limité aux 12 premiers actifs (sur {len(_diag_rows_pdf)} au total).",
+                    small_s))
+            story.append(_lecture(
+                f"{len(_diag_rows_pdf)} hôtel(s) critique(s) en BCC montrent aussi une "
+                f"faiblesse identifiable sur au moins une autre dimension"
+                + (f", dont {_n_multi_pdf} sur plusieurs dimensions à la fois — signal de "
+                   f"problème structurel : un plan managérial seul n'y suffira pas, "
+                   f"l'arbitrage doit couvrir les fonctions concernées simultanément."
+                   if _n_multi_pdf else
+                   " — dans chaque cas une seule dimension supplémentaire est en cause, "
+                   "un levier ciblé sur cette fonction devrait suffire.")
+            ))
 
     # ══════════════════ SIGNAUX CUMULÉS ══════════════════
     story.append(PageBreak())
@@ -3953,6 +4029,7 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
             "La métafrontière ne peut pas être calculée sans au moins une de "
             "ces colonnes."
         )
+        groups = meta_df = meta_sum = None
     else:
         seg_label = st.selectbox(
             "Dimension de segmentation",
@@ -3968,121 +4045,122 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
         warns = [w for w in meta_df['_warn'].dropna().unique() if w]
         for w in warns:
             st.warning(w)
-    st.dataframe(meta_sum, use_container_width=True, hide_index=True)
-    display_cols = ['Hôtel', 'Groupe', 'GTE', 'MTE', 'TGR', 'Interprétation']
-    st.dataframe(meta_df[display_cols].sort_values('TGR'), use_container_width=True, hide_index=True)
+    if meta_df is not None:
+        st.dataframe(meta_sum, use_container_width=True, hide_index=True)
+        display_cols = ['Hôtel', 'Groupe', 'GTE', 'MTE', 'TGR', 'Interprétation']
+        st.dataframe(meta_df[display_cols].sort_values('TGR'), use_container_width=True, hide_index=True)
 
-    # Convertir groupes en string (classement_etoiles = entiers → crash Plotly)
-    meta_df['Groupe'] = meta_df['Groupe'].astype(str)
-    grp_colors  = px.colors.qualitative.Set2
-    unique_grps = meta_df['Groupe'].unique()
-    color_map   = {g: grp_colors[i % len(grp_colors)] for i, g in enumerate(unique_grps)}
-    fig_meta = go.Figure()
-    for grp in unique_grps:
-        sub = meta_df[meta_df['Groupe'] == grp]
-        fig_meta.add_trace(go.Scatter(
-            x=sub['GTE'], y=sub['TGR'], mode='markers+text',
-            text=sub['Hôtel'], textposition='top center', textfont=dict(size=9),
-            marker=dict(size=12, color=color_map[grp]), name=str(grp),
+        # Convertir groupes en string (classement_etoiles = entiers → crash Plotly)
+        meta_df['Groupe'] = meta_df['Groupe'].astype(str)
+        grp_colors  = px.colors.qualitative.Set2
+        unique_grps = meta_df['Groupe'].unique()
+        color_map   = {g: grp_colors[i % len(grp_colors)] for i, g in enumerate(unique_grps)}
+        fig_meta = go.Figure()
+        for grp in unique_grps:
+            sub = meta_df[meta_df['Groupe'] == grp]
+            fig_meta.add_trace(go.Scatter(
+                x=sub['GTE'], y=sub['TGR'], mode='markers+text',
+                text=sub['Hôtel'], textposition='top center', textfont=dict(size=9),
+                marker=dict(size=12, color=color_map[grp]), name=str(grp),
+            ))
+        fig_meta.add_hline(y=0.90, line_dash='dash', line_color='gray', opacity=0.4)
+        fig_meta.add_vline(x=0.90, line_dash='dash', line_color='gray', opacity=0.4)
+        fig_meta.update_layout(
+            title="Positionnement GTE × TGR par groupe",
+            xaxis=dict(title="GTE", range=[0.3, 1.08], tickformat='.0%'),
+            yaxis=dict(title="TGR", range=[0.3, 1.08], tickformat='.0%'),
+            height=520, paper_bgcolor='rgba(0,0,0,0)', legend_title="Groupe",
+        )
+        st.plotly_chart(fig_meta, use_container_width=True)
+
+        meta_sorted = meta_df.sort_values('TGR')
+        fig_tgr = go.Figure(go.Bar(
+            x=meta_sorted['TGR'], y=meta_sorted['Hôtel'], orientation='h',
+            marker=dict(color=meta_sorted['TGR'], colorscale='RdYlGn', cmin=0.4, cmax=1.0,
+                        showscale=True, colorbar=dict(title="TGR", tickformat='.0%')),
+            text=[f"{v:.1%}" for v in meta_sorted['TGR']], textposition='outside',
+            customdata=meta_sorted[['GTE', 'MTE', 'Groupe']].values,
+            hovertemplate="<b>%{y}</b><br>TGR : %{x:.1%}<br>GTE : %{customdata[0]:.1%}<br>MTE : %{customdata[1]:.1%}<br>Groupe : %{customdata[2]}<extra></extra>",
         ))
-    fig_meta.add_hline(y=0.90, line_dash='dash', line_color='gray', opacity=0.4)
-    fig_meta.add_vline(x=0.90, line_dash='dash', line_color='gray', opacity=0.4)
-    fig_meta.update_layout(
-        title="Positionnement GTE × TGR par groupe",
-        xaxis=dict(title="GTE", range=[0.3, 1.08], tickformat='.0%'),
-        yaxis=dict(title="TGR", range=[0.3, 1.08], tickformat='.0%'),
-        height=520, paper_bgcolor='rgba(0,0,0,0)', legend_title="Groupe",
-    )
-    st.plotly_chart(fig_meta, use_container_width=True)
-
-    meta_sorted = meta_df.sort_values('TGR')
-    fig_tgr = go.Figure(go.Bar(
-        x=meta_sorted['TGR'], y=meta_sorted['Hôtel'], orientation='h',
-        marker=dict(color=meta_sorted['TGR'], colorscale='RdYlGn', cmin=0.4, cmax=1.0,
-                    showscale=True, colorbar=dict(title="TGR", tickformat='.0%')),
-        text=[f"{v:.1%}" for v in meta_sorted['TGR']], textposition='outside',
-        customdata=meta_sorted[['GTE', 'MTE', 'Groupe']].values,
-        hovertemplate="<b>%{y}</b><br>TGR : %{x:.1%}<br>GTE : %{customdata[0]:.1%}<br>MTE : %{customdata[1]:.1%}<br>Groupe : %{customdata[2]}<extra></extra>",
-    ))
-    fig_tgr.update_layout(
-        title="Technology Gap Ratio", xaxis=dict(title="TGR", range=[0, 1.15], tickformat='.0%'),
-        height=max(380, len(dea.hotels) * 28), paper_bgcolor='rgba(0,0,0,0)',
-    )
-    st.plotly_chart(fig_tgr, use_container_width=True)
+        fig_tgr.update_layout(
+            title="Technology Gap Ratio", xaxis=dict(title="TGR", range=[0, 1.15], tickformat='.0%'),
+            height=max(380, len(dea.hotels) * 28), paper_bgcolor='rgba(0,0,0,0)',
+        )
+        st.plotly_chart(fig_tgr, use_container_width=True)
 
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.success("**✅ GTE élevé + TGR élevé** — Leader absolu. Conserver, benchmark.")
-        st.warning("**⚙️ GTE élevé + TGR faible** — Bon gestionnaire, mauvais segment → arbitrage.")
-    with col2:
-        st.info("**🧠 GTE faible + TGR élevé** — Potentiel là, gestion insuffisante → plan opérationnel.")
-        st.error("**🔴 GTE faible + TGR faible** — Double gap. Cession ou restructuration.")
-    st.caption(
-        "« Élevé » = quartile supérieur de GTE/TGR **dans ce portefeuille** (plancher 75% en "
-        "absolu), pas un seuil fixe universel — sur un compset homogène, un seuil fixe "
-        "classerait presque tout le monde en \"Leader absolu\" sans que ce soit discriminant."
-    )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.success("**✅ GTE élevé + TGR élevé** — Leader absolu. Conserver, benchmark.")
+            st.warning("**⚙️ GTE élevé + TGR faible** — Bon gestionnaire, mauvais segment → arbitrage.")
+        with col2:
+            st.info("**🧠 GTE faible + TGR élevé** — Potentiel là, gestion insuffisante → plan opérationnel.")
+            st.error("**🔴 GTE faible + TGR faible** — Double gap. Cession ou restructuration.")
+        st.caption(
+            "« Élevé » = quartile supérieur de GTE/TGR **dans ce portefeuille** (plancher 75% en "
+            "absolu), pas un seuil fixe universel — sur un compset homogène, un seuil fixe "
+            "classerait presque tout le monde en \"Leader absolu\" sans que ce soit discriminant."
+        )
 
-    st.info(
-        "💡 **Peers restreints au segment pertinent via GTE** — la frontière intra-groupe "
-        "garantit que chaque hôtel est évalué contre ses vrais comparables (même segment). "
-        "Restreindre manuellement les peers est redondant avec cette mécanique. "
-        "Réf. : Assaf, Barros & Josiassen (2010) Table 3.",
-    )
+        st.info(
+            "💡 **Peers restreints au segment pertinent via GTE** — la frontière intra-groupe "
+            "garantit que chaque hôtel est évalué contre ses vrais comparables (même segment). "
+            "Restreindre manuellement les peers est redondant avec cette mécanique. "
+            "Réf. : Assaf, Barros & Josiassen (2010) Table 3.",
+        )
 
-    # ── ANOVA second stage (Poldrugovac 2016 ; Assaf 2009) ────────────────────────
-    st.markdown("---")
-    st.markdown('<p class="section-title">ANOVA Second Stage -- Differences efficience entre groupes</p>', unsafe_allow_html=True)
-    st.caption('Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
+        # ── ANOVA second stage (Poldrugovac 2016 ; Assaf 2009) ────────────────────────
+        st.markdown("---")
+        st.markdown('<p class="section-title">ANOVA Second Stage -- Differences efficience entre groupes</p>', unsafe_allow_html=True)
+        st.caption('Poldrugovac et al. (2016), Färe et al. (1994), Yu (2012), Tobin (1958) Table 6 ; Assaf et al. (2009) Table 3 -- Test H0 : pas de difference efficience BCC entre groupes. Welch si variances heterogenes (Levene p < 0.05).')
 
-    try:
-        # Mann-Whitney (Yu 2012) + ANOVA classique
-        _mw_res = mann_whitney_groups(dea, groups)
-        if 'error' not in _mw_res:
-            col_a1, col_a2 = st.columns([3, 1])
-            with col_a1:
-                st.markdown('**Mann-Whitney U par groupe (Yu 2012, Table 4-5)**')
-                st.dataframe(_mw_res['summary'], use_container_width=True, hide_index=True)
-                st.dataframe(_mw_res['pairs'][['Groupe A','Groupe B','Moy. BCC A','Moy. BCC B','p-value','Sig.*','Verdict']],
-                             use_container_width=True, hide_index=True)
-            with col_a2:
-                st.metric('Groupes testés', _mw_res['n_groupes'])
-                st.metric('Alpha Bonferroni', f"{_mw_res['alpha_bonf']:.4f}")
-                st.caption(_mw_res['test'])
-            st.info('*** p<0.01  ** p<0.05  * p<0.10  ns = non significatif. '
-                    'Test non-paramétrique recommandé pour scores DEA censurés en 1.0 '
-                    '(Simar & Wilson 2007 ; Yu 2012).')
-        else:
-            _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
-            st.dataframe(_anova_summ, use_container_width=True, hide_index=True)
-            st.dataframe(_anova_res, use_container_width=True, hide_index=True)
-    except Exception as _e:
-        st.info(f"ANOVA non disponible : {_e}")
+        try:
+            # Mann-Whitney (Yu 2012) + ANOVA classique
+            _mw_res = mann_whitney_groups(dea, groups)
+            if 'error' not in _mw_res:
+                col_a1, col_a2 = st.columns([3, 1])
+                with col_a1:
+                    st.markdown('**Mann-Whitney U par groupe (Yu 2012, Table 4-5)**')
+                    st.dataframe(_mw_res['summary'], use_container_width=True, hide_index=True)
+                    st.dataframe(_mw_res['pairs'][['Groupe A','Groupe B','Moy. BCC A','Moy. BCC B','p-value','Sig.*','Verdict']],
+                                 use_container_width=True, hide_index=True)
+                with col_a2:
+                    st.metric('Groupes testés', _mw_res['n_groupes'])
+                    st.metric('Alpha Bonferroni', f"{_mw_res['alpha_bonf']:.4f}")
+                    st.caption(_mw_res['test'])
+                st.info('*** p<0.01  ** p<0.05  * p<0.10  ns = non significatif. '
+                        'Test non-paramétrique recommandé pour scores DEA censurés en 1.0 '
+                        '(Simar & Wilson 2007 ; Yu 2012).')
+            else:
+                _anova_summ, _anova_res = dea.anova_efficiency_by_groups(groups)
+                st.dataframe(_anova_summ, use_container_width=True, hide_index=True)
+                st.dataframe(_anova_res, use_container_width=True, hide_index=True)
+        except Exception as _e:
+            st.info(f"ANOVA non disponible : {_e}")
 
-    # ── Bootstrap Metafrontière (Assaf 2009 ; Simar & Wilson 2007) ─────────────
-    st.markdown("---")
-    st.markdown('<p class="section-title">Bootstrap Metafrontière — Intervalles de confiance IC 95%</p>', unsafe_allow_html=True)
-    st.caption("Assaf, Barros & Josiassen (2009) ; Simar & Wilson (2007) — 2000 itérations dans le papier original. Ici 200 itérations pour performance. IC 95% sur GTE, MTE, TGR.")
+        # ── Bootstrap Metafrontière (Assaf 2009 ; Simar & Wilson 2007) ─────────────
+        st.markdown("---")
+        st.markdown('<p class="section-title">Bootstrap Metafrontière — Intervalles de confiance IC 95%</p>', unsafe_allow_html=True)
+        st.caption("Assaf, Barros & Josiassen (2009) ; Simar & Wilson (2007) — 2000 itérations dans le papier original. Ici 200 itérations pour performance. IC 95% sur GTE, MTE, TGR.")
 
-    _n_boot = st.slider("Nombre d'itérations bootstrap", min_value=50, max_value=500, value=100, step=50, key="meta_bootstrap_n")
-    if st.button("🔄 Lancer Bootstrap Metafrontière", key="meta_boot_btn"):
-        with st.spinner(f"Bootstrap {_n_boot} itérations en cours…"):
-            try:
-                _boot_df = dea.compute_metafrontier_bootstrap(groups, n_bootstrap=_n_boot)
-                st.session_state['meta_bootstrap'] = _boot_df
-                st.success(f"✅ Bootstrap terminé — {_n_boot} itérations")
-            except Exception as _e:
-                st.error(f"Erreur bootstrap : {_e}")
+        _n_boot = st.slider("Nombre d'itérations bootstrap", min_value=50, max_value=500, value=100, step=50, key="meta_bootstrap_n")
+        if st.button("🔄 Lancer Bootstrap Metafrontière", key="meta_boot_btn"):
+            with st.spinner(f"Bootstrap {_n_boot} itérations en cours…"):
+                try:
+                    _boot_df = dea.compute_metafrontier_bootstrap(groups, n_bootstrap=_n_boot)
+                    st.session_state['meta_bootstrap'] = _boot_df
+                    st.success(f"✅ Bootstrap terminé — {_n_boot} itérations")
+                except Exception as _e:
+                    st.error(f"Erreur bootstrap : {_e}")
 
-    if st.session_state.get('meta_bootstrap') is not None:
-        _bdf = st.session_state['meta_bootstrap']
-        _boot_cols = ['Hôtel', 'Groupe', 'GTE', 'GTE IC bas', 'GTE IC haut',
-                      'MTE', 'MTE IC bas', 'MTE IC haut',
-                      'TGR', 'TGR IC bas', 'TGR IC haut', 'Interprétation']
-        _boot_cols_avail = [c for c in _boot_cols if c in _bdf.columns]
-        st.dataframe(_bdf[_boot_cols_avail].sort_values('TGR'), use_container_width=True, hide_index=True)
-        st.caption("IC bas / IC haut = quantiles 2.5% et 97.5% des scores bootstrap. Un IC large indique une incertitude statistique élevée sur le score.")
+        if st.session_state.get('meta_bootstrap') is not None:
+            _bdf = st.session_state['meta_bootstrap']
+            _boot_cols = ['Hôtel', 'Groupe', 'GTE', 'GTE IC bas', 'GTE IC haut',
+                          'MTE', 'MTE IC bas', 'MTE IC haut',
+                          'TGR', 'TGR IC bas', 'TGR IC haut', 'Interprétation']
+            _boot_cols_avail = [c for c in _boot_cols if c in _bdf.columns]
+            st.dataframe(_bdf[_boot_cols_avail].sort_values('TGR'), use_container_width=True, hide_index=True)
+            st.caption("IC bas / IC haut = quantiles 2.5% et 97.5% des scores bootstrap. Un IC large indique une incertitude statistique élevée sur le score.")
 
     # ── KPIs enrichis — Market share + Guests/ETP (Assaf 2009) ───────────
     st.markdown("---")
@@ -5261,43 +5339,71 @@ sont automatiquement mappées vers les noms standard des modules.*
             )
         render_synthesis_tab(_module_results, dmu_col="hotel_name")
 
-        # ── Signal croisé : hôtels critiques (BCC) ET faibles en Revenue Management ──
-        # Le BCC de base compare RevPAR/satisfaction/occupation aux pairs mais ne dit
-        # jamais POURQUOI un hôtel sous-performe. Le module Revenue Management (TRevPAR,
-        # ADR, coûts de distribution) peut apporter cette explication — donc dès qu'il
-        # est actif, on le croise avec les hôtels déjà signalés critiques ailleurs dans
-        # l'app, plutôt que de le laisser comme un module isolé qu'il faut aller
-        # consulter à part.
-        _rm_result = _module_results.get('revenue_management')
-        if _rm_result is not None and not _rm_result.error and not _rm_result.scores.empty:
-            _rm_scores = dict(zip(_rm_result.scores['dmu_name'], _rm_result.scores['efficiency']))
-            _cross_rows = []
+        # ── Diagnostic croisé multi-dimensions ──────────────────────────────────
+        # Le BCC de base (opérationnel : chambres/ETP/charges → RevPAR/satisfaction/
+        # occupation) compare les hôtels à leurs pairs mais ne dit jamais POURQUOI
+        # un hôtel sous-performe. Chaque module actif (Financier, Commercial/Revenue
+        # Mgmt, RH) mesure une dimension différente de la même question — donc dès
+        # qu'un module est actif, on le croise avec les hôtels déjà signalés
+        # critiques en BCC, plutôt que de le laisser comme un onglet isolé à
+        # consulter à part. Un hôtel signalé sur plusieurs dimensions à la fois
+        # pose un problème structurel, pas un simple ajustement managérial.
+        _dim_modules = {
+            'financial_usali'   : '💰 Financier',
+            'revenue_management': '📈 Commercial / Revenue Mgmt',
+            'workforce'         : '👥 Ressources Humaines',
+        }
+        _dim_scores = {}
+        for _mid, _label in _dim_modules.items():
+            _res = _module_results.get(_mid)
+            if _res is not None and not _res.error and not _res.scores.empty:
+                _dim_scores[_label] = dict(zip(_res.scores['dmu_name'], _res.scores['efficiency']))
+
+        st.markdown("---")
+        st.markdown('<p class="section-title">🎯 Diagnostic croisé — Opérationnel × Financier × Commercial × RH</p>', unsafe_allow_html=True)
+
+        if not _dim_scores:
+            st.caption(
+                "Aucun module Financier / Commercial / RH actif avec de vraies données — "
+                "seul le diagnostic opérationnel (BCC) est disponible. Uploadez "
+                "l'enrichissement pour débloquer les autres dimensions."
+            )
+        else:
+            _diag_rows = []
             for h in dea.hotels:
                 _bcc_h = dea.bcc_scores.get(h, 1.0)
-                _rm_h  = _rm_scores.get(h)
-                if _bcc_h < 0.85 and _rm_h is not None and _rm_h < 0.85:
-                    _cross_rows.append({
-                        'Hôtel': h,
-                        'BCC (opérationnel)': f"{_bcc_h:.1%}",
-                        'Efficience Revenue Mgmt': f"{_rm_h:.1%}",
-                        'Lecture': "Sous-performance opérationnelle ET commerciale — le "
-                                   "problème n'est probablement pas qu'un levier managérial "
-                                   "interne, la distribution/tarification y contribue aussi.",
-                    })
-            st.markdown("---")
-            st.markdown('<p class="section-title">🎯 Signal croisé — Opérationnel × Revenue Management</p>', unsafe_allow_html=True)
-            if _cross_rows:
-                st.warning(
-                    f"{len(_cross_rows)} hôtel(s) critique(s) en BCC (<85%) le sont aussi en "
-                    f"Revenue Management (<85%) — la sous-performance a probablement une "
-                    f"composante commerciale/distribution, pas seulement opérationnelle."
+                if _bcc_h >= 0.85:
+                    continue
+                _weak_dims = [lbl for lbl, sc in _dim_scores.items() if sc.get(h) is not None and sc[h] < 0.85]
+                if not _weak_dims:
+                    continue
+                _row = {'Hôtel': h, 'BCC (opérationnel)': f"{_bcc_h:.1%}"}
+                for lbl, sc in _dim_scores.items():
+                    _v = sc.get(h)
+                    _row[lbl] = f"{_v:.1%}" if _v is not None else "n/d"
+                _row['Dimensions en cause'] = ", ".join(d.split(" ", 1)[1] if " " in d else d for d in _weak_dims)
+                _row['Lecture'] = (
+                    "Problème structurel multi-dimensions — pas qu'un levier managérial isolé."
+                    if len(_weak_dims) >= 2 else
+                    f"Sous-performance concentrée sur une dimension identifiable ({_weak_dims[0].split(' ',1)[-1]})."
                 )
-                st.dataframe(pd.DataFrame(_cross_rows), use_container_width=True, hide_index=True)
+                _diag_rows.append(_row)
+
+            if _diag_rows:
+                _n_multi = sum(1 for r in _diag_rows if len(r['Dimensions en cause'].split(', ')) >= 2)
+                st.warning(
+                    f"{len(_diag_rows)} hôtel(s) critique(s) en BCC (<85%) montrent aussi une "
+                    f"faiblesse identifiable sur au moins une autre dimension"
+                    + (f", dont {_n_multi} sur plusieurs dimensions à la fois — signal de "
+                       f"problème structurel, pas d'un simple ajustement opérationnel."
+                       if _n_multi else ".")
+                )
+                st.dataframe(pd.DataFrame(_diag_rows), use_container_width=True, hide_index=True)
             else:
                 st.caption(
-                    "Aucun hôtel critique en BCC ne l'est aussi en Revenue Management sur ce "
-                    "portefeuille — les sous-performances identifiées semblent d'origine "
-                    "opérationnelle plutôt que commerciale."
+                    "Les hôtels critiques en BCC ne montrent pas de faiblesse identifiable sur "
+                    "les autres dimensions actives — la sous-performance semble d'origine "
+                    "purement opérationnelle."
                 )
 
     # ══════════════════════════════════════════════════════════════════════
@@ -5310,7 +5416,7 @@ sont automatiquement mappées vers les noms standard des modules.*
     st.markdown("---")
     st.markdown('<p class="section-title">📥 Rapport Portfolio PDF</p>', unsafe_allow_html=True)
     st.caption(
-        "Document de comité d'investissement — 12 sections. Chaque section comprend "
+        "Document de comité d'investissement — 13 sections. Chaque section comprend "
         "la méthode, un tableau et une lecture investisseur interprétant vos chiffres. "
         "Le rapport s'adapte automatiquement au portefeuille chargé : variables, "
         "nombre d'actifs et données disponibles."
@@ -5361,10 +5467,15 @@ sont automatiquement mappées vers les noms standard des modules.*
          "Colonnes revpar_n1 et gop_n1 requises en plus des données capital"),
         ("12. Malmquist (productivité N-1)", _has_n1,
          "Colonnes _n1 requises dans le fichier source"),
+        ("13. Diagnostic croisé multi-dimensions", any(
+            (_module_results.get(m) is not None and not _module_results[m].error
+             and not _module_results[m].scores.empty)
+            for m in ('financial_usali', 'revenue_management', 'workforce')),
+         "Au moins un module Financier/Commercial/RH actif avec de vraies données"),
     ]
     _ready = sum(1 for _, ok, _ in _SECTIONS if ok)
 
-    with st.expander(f"📋 Contenu du rapport — {_ready}/12 sections alimentées",
+    with st.expander(f"📋 Contenu du rapport — {_ready}/13 sections alimentées",
                      expanded=(_ready < 12)):
         _sc1, _sc2 = st.columns(2)
         for _i, (_nm, _ok, _fix) in enumerate(_SECTIONS):
@@ -5456,6 +5567,7 @@ sont automatiquement mappées vers les noms standard des modules.*
                         jours_exploit=jours_exploit, ft_pct=ft_pct,
                         avg_salary=avg_salary,
                         thresholds=REPORT_THRESHOLDS,
+                        module_results=st.session_state.get('module_results', {}),
                     )
                     if _rp:
                         st.session_state["portfolio_pdf"]      = _rp
@@ -5483,7 +5595,7 @@ sont automatiquement mappées vers les noms standard des modules.*
             if _meta:
                 st.caption(
                     f"Généré le {_meta.get('ts','—')} · {_meta.get('ko','—')} Ko · "
-                    f"{_meta.get('sections','—')}/12 sections alimentées"
+                    f"{_meta.get('sections','—')}/13 sections alimentées"
                 )
 
 
