@@ -220,12 +220,48 @@ class HotelDEAAnalyzer:
     #  Slacks & Targets
     # ─────────────────────────────────────────────
     def _compute_slacks_and_targets(self, idx, hotel, theta, lambdas):
-        in_slacks  = [max(0.0, self.inputs[idx, j] * theta
-                          - sum(lambdas[k] * self.inputs[k, j] for k in range(self.n)))
-                      for j in range(self.inputs.shape[1])]
-        out_slacks = [max(0.0, sum(lambdas[k] * self.outputs[k, j] for k in range(self.n))
-                          - self.outputs[idx, j])
-                      for j in range(self.outputs.shape[1])]
+        """
+        Slacks maximaux — Phase 2 (Charnes, Cooper & Rhodes 1978 ; standard en
+        DEA à deux étapes). La Phase 1 ne fait que minimiser theta ; parmi
+        toutes les combinaisons de pairs (lambda) qui atteignent ce theta
+        optimal — souvent nombreuses, la LP de Phase 1 est fréquemment
+        dégénérée — rien ne garantit que le sommet choisi par le solveur
+        révèle le vrai potentiel sur chaque input/output. Sans cette Phase 2,
+        un output comme RevPAR peut apparaître à tort comme "sans marge de
+        progression" (slack nul) simplement parce que le solveur s'est arrêté
+        sur une combinaison de pairs qui l'égale exactement, alors qu'une
+        autre combinaison tout aussi optimale pour theta révélerait un vrai
+        écart. La Phase 2 résout une seconde LP, à theta fixé, qui maximise
+        explicitement la somme des slacks — c'est la méthode correcte, pas
+        une option.
+        """
+        n_in, n_out = self.inputs.shape[1], self.outputs.shape[1]
+        model   = pulp.LpProblem(f"DEA_slacks_{idx}", pulp.LpMaximize)
+        lam2    = pulp.LpVariable.dicts("lam2", range(self.n), lowBound=0)
+        s_in    = pulp.LpVariable.dicts("s_in",  range(n_in),  lowBound=0)
+        s_out   = pulp.LpVariable.dicts("s_out", range(n_out), lowBound=0)
+
+        # Normalisation non-archimédienne : sans elle, la somme brute des
+        # slacks favoriserait mécaniquement la variable à la plus grande
+        # échelle (ex. couts_op_ex en €) au détriment des autres (ex. TO en %).
+        in_scale  = [max(float(self.inputs[:, j].mean()), 1e-9)  for j in range(n_in)]
+        out_scale = [max(float(self.outputs[:, j].mean()), 1e-9) for j in range(n_out)]
+        model += (pulp.lpSum(s_in[j] / in_scale[j] for j in range(n_in))
+                  + pulp.lpSum(s_out[j] / out_scale[j] for j in range(n_out)))
+
+        for j in range(n_in):
+            model += (pulp.lpSum(lam2[k] * self.inputs[k, j] for k in range(self.n)) + s_in[j]
+                      == theta * self.inputs[idx, j])
+        for j in range(n_out):
+            model += (pulp.lpSum(lam2[k] * self.outputs[k, j] for k in range(self.n)) - s_out[j]
+                      == self.outputs[idx, j])
+        model += pulp.lpSum(lam2.values()) == 1  # VRS — seul contexte d'appel (BCC)
+        model.solve(pulp.PULP_CBC_CMD(msg=False))
+
+        in_slacks  = [max(0.0, pulp.value(s_in[j])  or 0.0) for j in range(n_in)]
+        out_slacks = [max(0.0, pulp.value(s_out[j]) or 0.0) for j in range(n_out)]
+        lam2_val   = {k: (pulp.value(lam2[k]) or 0.0) for k in range(self.n)}
+
         # Utilise self.input_cols / self.output_cols (adapté au mode standard/compact/minimal)
         # Réf. : Raab & Lichty (2002) — ne pas indexer INPUT_COLS hardcodé en mode réduit
         self.slacks[hotel] = {
@@ -237,6 +273,11 @@ class HotelDEAAnalyzer:
                         for j in range(len(self.input_cols))},
             'outputs': {self.output_cols[j]: self.outputs[idx, j] + out_slacks[j]
                         for j in range(len(self.output_cols))},
+        }
+        # Peers recalculés sur les lambdas de Phase 2 — cohérents avec les
+        # slacks rapportés (ceux de Phase 1 pouvaient différer, LP dégénérée).
+        self.peers[hotel] = {
+            self.hotels[k]: v for k, v in lam2_val.items() if v > 1e-5 and k != idx
         }
 
     # ─────────────────────────────────────────────
@@ -305,7 +346,7 @@ class HotelDEAAnalyzer:
 
             slack_r = self.slacks.get(hotel, {}).get('outputs', {}).get('revpar', 0)
             cap['upside_gop_ft'] = (round(slack_r * lits * 365 * ft / 1_000_000, 3)
-                                    if ft else None)
+                                    if ft and self.has_chambres and lits else None)
             self.capital_metrics[hotel] = cap
 
     # ─────────────────────────────────────────────
