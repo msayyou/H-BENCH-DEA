@@ -475,7 +475,7 @@ class HotelDEAAnalyzer:
 
     def anova_efficiency_by_groups(
         self, groups: pd.Series
-    ) -> pd.DataFrame:
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         ANOVA one-way sur les scores BCC par groupe.
         Test H0 : pas de différence d'efficience entre groupes.
@@ -489,7 +489,10 @@ class HotelDEAAnalyzer:
             groups : pd.Series index=hotel_name, values=groupe
 
         Returns:
-            DataFrame : Groupe | N | BCC moy. | BCC std | F-stat | p-value | Test | Interprétation
+            (summary, anova_row) — toujours un tuple de 2 DataFrames, y
+            compris quand l'ANOVA n'est pas calculable (summary porte alors
+            le message, anova_row est vide) : l'appelant fait toujours
+            `summary, anova_row = anova_efficiency_by_groups(...)`.
         """
         from scipy import stats as _stats
 
@@ -501,7 +504,8 @@ class HotelDEAAnalyzer:
                 grp_scores[grp] = [self.bcc_scores[h] for h in h_list]
 
         if len(grp_scores) < 2:
-            return pd.DataFrame({'Message': ['Moins de 2 groupes avec ≥ 2 DMUs — ANOVA impossible']})
+            return (pd.DataFrame({'Message': ['Moins de 2 groupes avec ≥ 2 DMUs — ANOVA impossible']}),
+                    pd.DataFrame())
 
         # Test de Levene (homogénéité des variances)
         lev_stat, lev_p = _stats.levene(*grp_scores.values())
