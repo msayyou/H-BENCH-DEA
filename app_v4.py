@@ -1737,7 +1737,8 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📐 Mode variables (Raab & Lichty, 2002)")
     _n_hotels = len(df) if 'df' in dir() else 0
-    _std_min = 18 if 'nb_chambres' in df.columns else 15
+    _has_ch_col = ('df' in dir()) and ('nb_chambres' in df.columns)
+    _std_min = 18 if _has_ch_col else 15
     if _n_hotels > 0 and _n_hotels < _std_min:
         st.warning(f"⚠️ {_n_hotels} hôtels — en dessous du seuil standard ({_std_min}). Voir mode ci-dessous.")
 
@@ -1745,9 +1746,9 @@ with st.sidebar:
         "Nombre de variables",
         options=['standard', 'compact', 'minimal'],
         format_func=lambda x: {
-            'standard': (f"Standard ({'3+3' if 'nb_chambres' in df.columns else '2+3'}) — min "
-                         f"{'18' if 'nb_chambres' in df.columns else '15'} hôtels · "
-                         f"{'Chambres + ETP + OpEx' if 'nb_chambres' in df.columns else 'ETP + OpEx'} → RevPAR + Sat + TO"),
+            'standard': (f"Standard ({'3+3' if _has_ch_col else '2+3'}) — min "
+                         f"{'18' if _has_ch_col else '15'} hôtels · "
+                         f"{'Chambres + ETP + OpEx' if _has_ch_col else 'ETP + OpEx'} → RevPAR + Sat + TO"),
             'compact' : f"Compact (2+2) — min 12 hôtels · ETP + OpEx → RevPAR + Satisfaction",
             'minimal' : f"Minimal (2+1) — min 9 hôtels  · ETP + OpEx → RevPAR",
         }[x],
