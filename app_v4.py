@@ -2888,6 +2888,23 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
     st.markdown("---")
     st.markdown('<p class="section-title">Profil Compset - Grille de coherence (Exhibit 8)</p>', unsafe_allow_html=True)
     st.caption('Valider que les DMUs sont comparables avant interpretation DEA. RGI doit rester entre 80 et 130% pour valider le compset.')
+    st.info(
+        "**Localisation** pré-remplie à partir du nom de l'hôtel (aéroport pour "
+        "CDG/Orly/Nice Aéroport, périphérie pour Labège/Saint-Grégoire — vrais lieux "
+        "identifiables, base géographique réelle) — à corriger si besoin. "
+        "**Gestion** reste au défaut faute d'information : aucune donnée ne permet de "
+        "distinguer franchise/3rd party/owner-operated par hôtel — inventer une "
+        "répartition serait fabriquer une donnée sans base, à renseigner manuellement "
+        "si tu connais les vraies structures de gestion Atream."
+    )
+
+    def _guess_localisation(hotel_name: str) -> str:
+        _n = hotel_name.lower()
+        if 'roissy' in _n or 'orly' in _n or 'aéroport' in _n or 'aeroport' in _n:
+            return 'Airport'
+        if 'labège' in _n or 'labege' in _n or 'saint-grégoire' in _n or 'saint-gregoire' in _n:
+            return 'Suburban'
+        return 'Centre-ville'
 
     _compset_init = pd.DataFrame({
         'Hôtel'           : dea.hotels,
@@ -2896,7 +2913,7 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         'Classement (e)'  : [3]*dea.n,
         'Affiliation'     : ['Independant']*dea.n,
         'Meeting (m2)'    : [0]*dea.n,
-        'Localisation'    : ['Centre-ville']*dea.n,
+        'Localisation'    : [_guess_localisation(h) for h in dea.hotels],
         'Gestion'         : ['3rd party']*dea.n,
     }).set_index('Hôtel')
     if dea.has_chambres:
