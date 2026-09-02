@@ -2442,8 +2442,9 @@ with tab_board:
         for _h in dea.hotels:
             _qq = dea.quadrants.get(_h,'Q4')
             _fig_q.add_trace(go.Scatter(x=[dea.scale_efficiency[_h]], y=[dea.bcc_scores[_h]],
-                mode='markers+text', text=[_h[:12]], textposition='top center',
-                textfont=dict(size=7), marker=dict(size=9, color=_qcols.get(_qq,'gray')), showlegend=False))
+                mode='markers', text=[_h],
+                hovertemplate="<b>%{text}</b><br>Scale : %{x:.1%}<br>BCC : %{y:.1%}<extra></extra>",
+                marker=dict(size=9, color=_qcols.get(_qq,'gray')), showlegend=False))
         _fig_q.add_hline(y=bcc_threshold, line_dash='dash', line_color='lightgray', line_width=1)
         _fig_q.add_vline(x=scale_threshold, line_dash='dash', line_color='lightgray', line_width=1)
         _fig_q.update_layout(title="Carte Quadrants BCC × Scale",
@@ -2686,8 +2687,8 @@ with tab_kpi:
     fig_scatter = go.Figure()
     for h in hotels_list:
         fig_scatter.add_trace(go.Scatter(
-            x=[dea.ccr_scores[h]], y=[dea.bcc_scores[h]], mode='markers+text',
-            text=[h], textposition='top center', textfont=dict(size=9),
+            x=[dea.ccr_scores[h]], y=[dea.bcc_scores[h]], mode='markers',
+            text=[h], hovertemplate="<b>%{text}</b><br>CCR : %{x:.1%}<br>BCC : %{y:.1%}<extra></extra>",
             marker=dict(size=10, color='#2e6da4'), name=h, showlegend=False,
         ))
     fig_scatter.add_shape(type='line', x0=0, y0=0, x1=1, y1=1, line=dict(dash='dash', color='gray'))
@@ -2869,8 +2870,7 @@ with tab_topsis:
                 _col = "#27ae60" if r["_bcc_f"]>=0.95 and r["_ce_f"]>=0.85 else                        "#e74c3c" if r["_bcc_f"]>=0.95 and r["_ce_f"]<0.75 else                        "#3498db"
                 fig_ce.add_trace(go.Scatter(
                     x=[r["_bcc_f"]], y=[r["_ce_f"]],
-                    mode="markers+text", text=[r["Hôtel"]],
-                    textposition="top center", textfont=dict(size=8),
+                    mode="markers", text=[r["Hôtel"]],
                     marker=dict(size=12, color=_col), showlegend=False,
                     hovertemplate=f"<b>{r['Hôtel']}</b><br>BCC: {r['_bcc_f']:.1%}<br>CE: {r['_ce_f']:.3f}<extra></extra>",
                 ))
@@ -3458,12 +3458,15 @@ with tab_fiche:
 
     fig_pos = go.Figure()
     for h in dea.hotels:
-        color = '#e74c3c' if h == selected else '#aec6e8'
-        size  = 16        if h == selected else 9
+        is_sel = (h == selected)
+        color = '#e74c3c' if is_sel else '#aec6e8'
+        size  = 16        if is_sel else 9
         fig_pos.add_trace(go.Scatter(
-            x=[dea.scale_efficiency[h]], y=[dea.bcc_scores[h]], mode='markers+text',
+            x=[dea.scale_efficiency[h]], y=[dea.bcc_scores[h]],
+            mode='markers+text' if is_sel else 'markers',
             text=[h], textposition='top center',
-            textfont=dict(size=8 if h != selected else 11, color='red' if h == selected else 'gray'),
+            textfont=dict(size=11, color='red'),
+            hovertemplate="<b>%{text}</b><br>Scale : %{x:.1%}<br>BCC : %{y:.1%}<extra></extra>",
             marker=dict(size=size, color=color), showlegend=False,
         ))
     fig_pos.add_hline(y=bcc_threshold, line_dash='dash', line_color='lightgray')
@@ -3970,8 +3973,9 @@ with tab_meta:
                 fig_km.add_trace(go.Scatter(
                     x=[dea.scale_efficiency[h] for h in hotels_c],
                     y=[dea.bcc_scores[h] for h in hotels_c],
-                    mode='markers+text', text=hotels_c, textposition='top center',
-                    textfont=dict(size=9), marker=dict(size=12, color=color), name=lbl,
+                    mode='markers', text=hotels_c,
+                    hovertemplate="<b>%{text}</b><br>Scale : %{x:.1%}<br>BCC : %{y:.1%}<extra></extra>",
+                    marker=dict(size=12, color=color, line=dict(width=1, color='white')), name=lbl,
                 ))
         fig_km.update_layout(
             title="Segmentation K-means : BCC vs Efficacité d'Échelle",
@@ -4061,9 +4065,10 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
         for grp in unique_grps:
             sub = meta_df[meta_df['Groupe'] == grp]
             fig_meta.add_trace(go.Scatter(
-                x=sub['GTE'], y=sub['TGR'], mode='markers+text',
-                text=sub['Hôtel'], textposition='top center', textfont=dict(size=9),
-                marker=dict(size=12, color=color_map[grp]), name=str(grp),
+                x=sub['GTE'], y=sub['TGR'], mode='markers',
+                text=sub['Hôtel'],
+                hovertemplate="<b>%{text}</b><br>GTE : %{x:.1%}<br>TGR : %{y:.1%}<extra></extra>",
+                marker=dict(size=12, color=color_map[grp], line=dict(width=1, color='white')), name=str(grp),
             ))
         fig_meta.add_hline(y=0.90, line_dash='dash', line_color='gray', opacity=0.4)
         fig_meta.add_vline(x=0.90, line_dash='dash', line_color='gray', opacity=0.4)
@@ -4186,8 +4191,8 @@ Un hôtel GTE élevé + TGR faible = bien géré dans un segment structurellemen
             _bcc = _enr_bcc[i]
             _color = '#27ae60' if _bcc >= 0.90 else '#f39c12' if _bcc >= 0.80 else '#e74c3c'
             fig_ms.add_trace(go.Scatter(
-                x=[_ms], y=[_bcc], mode='markers+text', text=[h],
-                textposition='top center', textfont=dict(size=8),
+                x=[_ms], y=[_bcc], mode='markers', text=[h],
+                hovertemplate="<b>%{text}</b><br>Market share : %{x:.1f}%<br>BCC : %{y:.1%}<extra></extra>",
                 marker=dict(size=10, color=_color), showlegend=False,
             ))
         fig_ms.update_layout(
@@ -4508,8 +4513,9 @@ with tab_capital:
                 for h, margin, bcc in margin_data:
                     color = '#27ae60' if bcc>=0.90 else '#f39c12' if bcc>=0.80 else '#e74c3c'
                     fig_gop.add_trace(go.Scatter(
-                        x=[bcc], y=[margin], mode='markers+text', text=[h], textposition='top center',
-                        textfont=dict(size=8), marker=dict(size=11, color=color, opacity=0.8), showlegend=False,
+                        x=[bcc], y=[margin], mode='markers', text=[h],
+                        hovertemplate="<b>%{text}</b><br>BCC : %{x:.1%}<br>Marge GOP : %{y:.1f}%<extra></extra>",
+                        marker=dict(size=11, color=color, opacity=0.8), showlegend=False,
                     ))
                 fig_gop.update_layout(xaxis=dict(title="Score BCC", tickformat='.0%', range=[0.3,1.05]),
                                       yaxis=dict(title="Marge GOP %"),
@@ -4597,8 +4603,7 @@ with tab_capital:
                               else '#e74c3c')
                     fig_dea_cap.add_trace(go.Scatter(
                         x=[_op], y=[_cap],
-                        mode='markers+text', text=[h],
-                        textposition='top center', textfont=dict(size=8),
+                        mode='markers', text=[h],
                         marker=dict(size=11, color=_color, opacity=0.85),
                         showlegend=False,
                         hovertemplate=f"<b>{h}</b><br>DEA Opérationnel : {_op:.1%}<br>DEA Capital : {_cap:.1%}<br>{_lecture}<extra></extra>",
@@ -4692,8 +4697,7 @@ with tab_capital:
                            else "#f39c12")
                 fig_rf.add_trace(go.Scatter(
                     x=[row_rf["_r"]], y=[row_rf["_f"]],
-                    mode="markers+text", text=[row_rf["Hôtel"]],
-                    textposition="top center", textfont=dict(size=8),
+                    mode="markers", text=[row_rf["Hôtel"]],
                     marker=dict(size=11, color=_col_rf), showlegend=False,
                     hovertemplate=f"<b>{row_rf['Hôtel']}</b><br>Room: {row_rf['_r']:.3f}<br>F&B: {row_rf['_f']:.3f}<extra></extra>",
                 ))
@@ -4988,9 +4992,8 @@ with tab_malm:
                                 else "#e74c3c" if _cu < 1 and _fs < 1
                                 else "#f39c12")
                         fig_decomp.add_trace(go.Scatter(
-                            x=[_cu], y=[_fs], mode="markers+text",
-                            text=[r["Hôtel"]], textposition="top center",
-                            textfont=dict(size=8),
+                            x=[_cu], y=[_fs], mode="markers",
+                            text=[r["Hôtel"]],
                             marker=dict(size=11, color=_col), showlegend=False,
                             hovertemplate=(f"<b>{r['Hôtel']}</b><br>"
                                           f"Catch-up: {_cu:.3f}<br>"
