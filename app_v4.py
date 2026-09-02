@@ -2920,7 +2920,12 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         # le terme standard du secteur (Franchise / Contrat de gestion / Owner-
         # operated), pour ne garder qu'une seule variable testable au lieu de
         # deux taxonomies qui se recouvraient.
-        'Affiliation'     : ['Franchise' if i % 2 == 0 else 'Mgmt contract' for i in range(dea.n)],
+        # Alternance 3 catégories par position — pas de lien avec le score BCC.
+        # Franchise = franchiseur et exploitant liés/mêmes (ex. Ibis + AccorInvest
+        # pour Atream) · Mgmt contract = exploitant opérateur professionnel,
+        # indépendamment de la marque · Owner-operated = propriétaire seul, ni
+        # franchise ni contrat de gestion.
+        'Affiliation'     : [['Franchise', 'Mgmt contract', 'Owner-operated'][i % 3] for i in range(dea.n)],
         'Meeting (m2)'    : [0]*dea.n,
         'Localisation'    : [_guess_localisation(h) for h in dea.hotels],
     }).set_index('Hôtel')
@@ -2934,7 +2939,12 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         'Annee ouv.'    : st.column_config.NumberColumn('Annee ouv.', min_value=1800, max_value=2030, format='%d'),
         'Dern. renov.'  : st.column_config.NumberColumn('Dern. renov.', min_value=1800, max_value=2030, format='%d'),
         'Classement (e)': st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
-        'Affiliation'   : st.column_config.SelectboxColumn('Affiliation', options=['Independant','Franchise','Mgmt contract','Owner-operated']),
+        'Affiliation'   : st.column_config.SelectboxColumn(
+            'Affiliation', options=['Franchise', 'Mgmt contract', 'Owner-operated'],
+            help="Franchise = franchiseur et exploitant liés ou identiques (ex. marque Ibis "
+                 "+ opérateur AccorInvest) · Mgmt contract = exploité par un opérateur "
+                 "professionnel, la marque n'est pas le sujet · Owner-operated = "
+                 "propriétaire seul, ni franchise ni contrat de gestion."),
         'Localisation'  : st.column_config.SelectboxColumn('Localisation', options=['Centre-ville','Suburban','Airport','Resort','Route']),
         'Meeting (m2)'  : st.column_config.NumberColumn('Meeting m2', min_value=0, format='%d'),
     }
@@ -5250,6 +5260,45 @@ sont automatiquement mappées vers les noms standard des modules.*
                 "définitifs."
             )
         render_synthesis_tab(_module_results, dmu_col="hotel_name")
+
+        # ── Signal croisé : hôtels critiques (BCC) ET faibles en Revenue Management ──
+        # Le BCC de base compare RevPAR/satisfaction/occupation aux pairs mais ne dit
+        # jamais POURQUOI un hôtel sous-performe. Le module Revenue Management (TRevPAR,
+        # ADR, coûts de distribution) peut apporter cette explication — donc dès qu'il
+        # est actif, on le croise avec les hôtels déjà signalés critiques ailleurs dans
+        # l'app, plutôt que de le laisser comme un module isolé qu'il faut aller
+        # consulter à part.
+        _rm_result = _module_results.get('revenue_management')
+        if _rm_result is not None and not _rm_result.error and not _rm_result.scores.empty:
+            _rm_scores = dict(zip(_rm_result.scores['dmu_name'], _rm_result.scores['efficiency']))
+            _cross_rows = []
+            for h in dea.hotels:
+                _bcc_h = dea.bcc_scores.get(h, 1.0)
+                _rm_h  = _rm_scores.get(h)
+                if _bcc_h < 0.85 and _rm_h is not None and _rm_h < 0.85:
+                    _cross_rows.append({
+                        'Hôtel': h,
+                        'BCC (opérationnel)': f"{_bcc_h:.1%}",
+                        'Efficience Revenue Mgmt': f"{_rm_h:.1%}",
+                        'Lecture': "Sous-performance opérationnelle ET commerciale — le "
+                                   "problème n'est probablement pas qu'un levier managérial "
+                                   "interne, la distribution/tarification y contribue aussi.",
+                    })
+            st.markdown("---")
+            st.markdown('<p class="section-title">🎯 Signal croisé — Opérationnel × Revenue Management</p>', unsafe_allow_html=True)
+            if _cross_rows:
+                st.warning(
+                    f"{len(_cross_rows)} hôtel(s) critique(s) en BCC (<85%) le sont aussi en "
+                    f"Revenue Management (<85%) — la sous-performance a probablement une "
+                    f"composante commerciale/distribution, pas seulement opérationnelle."
+                )
+                st.dataframe(pd.DataFrame(_cross_rows), use_container_width=True, hide_index=True)
+            else:
+                st.caption(
+                    "Aucun hôtel critique en BCC ne l'est aussi en Revenue Management sur ce "
+                    "portefeuille — les sous-performances identifiées semblent d'origine "
+                    "opérationnelle plutôt que commerciale."
+                )
 
     # ══════════════════════════════════════════════════════════════════════
     #  RAPPORT PORTFOLIO — finalité du parcours d'analyse
