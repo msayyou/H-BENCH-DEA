@@ -3191,8 +3191,10 @@ with tab_quad:
             fig_q.add_trace(go.Scatter(
                 x=[dea.scale_efficiency[h] for h in hotels_q],
                 y=[dea.bcc_scores[h] for h in hotels_q],
-                mode='markers+text', text=hotels_q, textposition='top center',
-                textfont=dict(size=9), marker=dict(size=13, color=quadrant_colors[q], symbol='circle'),
+                mode='markers', text=hotels_q,
+                hovertemplate="<b>%{text}</b><br>Scale Eff. : %{x:.1%}<br>BCC : %{y:.1%}<extra></extra>",
+                marker=dict(size=13, color=quadrant_colors[q], symbol='circle',
+                            line=dict(width=1, color='white')),
                 name=label,
             ))
     fig_q.add_hline(y=bcc_threshold, line_dash='dash', line_color='gray', opacity=0.5,
