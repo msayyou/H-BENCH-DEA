@@ -717,33 +717,44 @@ class HotelDEAAnalyzer:
         rng = np.random.default_rng(42)
 
         for _ in range(n_bootstrap):
-            # Rééchantillonnage avec remise
+            # Rééchantillonnage avec remise — sert de frontière de référence
+            # bootstrappée. Chaque hôtel est réévalué avec ses PROPRES données
+            # réelles (fixes) contre [données originales + tirage bootstrap] —
+            # jamais avec les données d'un autre hôtel substituées à la sienne.
+            # (l'ancienne version indexait bs_inp/bs_out par position d'origine
+            # après un rééchantillonnage qui déplace les lignes : le score
+            # attribué à l'hôtel j était en réalité celui d'un autre hôtel
+            # tombé en position j par le tirage — IC statistiquement invalides.)
             idx      = rng.integers(0, n, size=n)
             bs_inp   = self.inputs[idx]
             bs_out   = self.outputs[idx]
-            bs_hotels = [self.hotels[i] for i in idx]
-            bs_grp    = pd.Series({h: groups.get(h, '—') for h in bs_hotels})
+            comb_inp = np.vstack([self.inputs, bs_inp])
+            comb_out = np.vstack([self.outputs, bs_out])
 
-            # MTE bootstrap (frontière globale)
+            # MTE bootstrap (frontière globale) — hôtel j = ligne j du bloc
+            # original, toujours sa vraie donnée, jamais celle d'un tirage.
             for j, hotel in enumerate(self.hotels):
                 try:
-                    mte_j = self._solve_dea_subgroup(j, bs_inp, bs_out, rts=rts)
+                    mte_j = self._solve_dea_subgroup(j, comb_inp, comb_out, rts=rts)
                     bs_mte[hotel].append(mte_j)
                 except Exception:
                     bs_mte[hotel].append(np.nan)
 
-            # GTE bootstrap (frontière de groupe)
+            # GTE bootstrap (frontière de groupe) — même principe, à l'échelle du groupe
             unique_g = groups.loc[self.hotels].unique()
             for grp in unique_g:
                 grp_h    = [h for h in self.hotels if groups.get(h) == grp]
                 grp_idx  = [self.hotels.index(h) for h in grp_h]
-                bs_grp_inp = bs_inp[grp_idx]; bs_grp_out = bs_out[grp_idx]
                 if len(grp_h) < 3:
                     for h in grp_h: bs_gte[h].append(1.0)
                     continue
+                grp_orig_inp = self.inputs[grp_idx]; grp_orig_out = self.outputs[grp_idx]
+                grp_boot_inp = bs_inp[grp_idx];      grp_boot_out = bs_out[grp_idx]
+                grp_comb_inp = np.vstack([grp_orig_inp, grp_boot_inp])
+                grp_comb_out = np.vstack([grp_orig_out, grp_boot_out])
                 for i, h in enumerate(grp_h):
                     try:
-                        gte_j = self._solve_dea_subgroup(i, bs_grp_inp, bs_grp_out, rts=rts)
+                        gte_j = self._solve_dea_subgroup(i, grp_comb_inp, grp_comb_out, rts=rts)
                         bs_gte[h].append(gte_j)
                         tgr_j = min(bs_mte[h][-1] / gte_j, 1.0) if gte_j > 0 else 0.0
                         bs_tgr[h].append(tgr_j)
