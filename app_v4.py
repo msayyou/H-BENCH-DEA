@@ -2892,10 +2892,11 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         "**Localisation** pré-remplie à partir du nom de l'hôtel (aéroport pour "
         "CDG/Orly/Nice Aéroport, périphérie pour Labège/Saint-Grégoire — vrais lieux "
         "identifiables, base géographique réelle) — à corriger si besoin. "
-        "**Gestion** reste au défaut faute d'information : aucune donnée ne permet de "
-        "distinguer franchise/3rd party/owner-operated par hôtel — inventer une "
-        "répartition serait fabriquer une donnée sans base, à renseigner manuellement "
-        "si tu connais les vraies structures de gestion Atream."
+        "**Affiliation** (Franchise / Contrat de gestion / Owner-operated — terme "
+        "standard du secteur) pré-remplie en alternance simple (aucune base réelle, "
+        "aucun lien avec la performance des hôtels — juste une répartition arbitraire "
+        "pour que la variable soit testable) : ne pas présenter comme une vraie "
+        "donnée sans l'avoir remplacée par les vraies structures Atream."
     )
 
     def _guess_localisation(hotel_name: str) -> str:
@@ -2911,10 +2912,17 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         'Annee ouv.'      : [0]*dea.n,
         'Dern. renov.'    : [0]*dea.n,
         'Classement (e)'  : [3]*dea.n,
-        'Affiliation'     : ['Independant']*dea.n,
+        # Alternance simple par position dans la liste — pas de lien avec le score
+        # BCC ou tout autre résultat du modèle (endogénéité). Purement arbitraire,
+        # affiché comme tel, à remplacer par les vraies données Atream.
+        # Colonne unique pour la structure de gestion — fusionne l'ancienne
+        # "Gestion" (3rd party/Brand-managed/Owner-operated) dans "Affiliation",
+        # le terme standard du secteur (Franchise / Contrat de gestion / Owner-
+        # operated), pour ne garder qu'une seule variable testable au lieu de
+        # deux taxonomies qui se recouvraient.
+        'Affiliation'     : ['Franchise' if i % 2 == 0 else 'Mgmt contract' for i in range(dea.n)],
         'Meeting (m2)'    : [0]*dea.n,
         'Localisation'    : [_guess_localisation(h) for h in dea.hotels],
-        'Gestion'         : ['3rd party']*dea.n,
     }).set_index('Hôtel')
     if dea.has_chambres:
         _compset_init.insert(0, 'Capacité (chambres)',
@@ -2928,7 +2936,6 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         'Classement (e)': st.column_config.SelectboxColumn('Classement', options=[1,2,3,4,5]),
         'Affiliation'   : st.column_config.SelectboxColumn('Affiliation', options=['Independant','Franchise','Mgmt contract','Owner-operated']),
         'Localisation'  : st.column_config.SelectboxColumn('Localisation', options=['Centre-ville','Suburban','Airport','Resort','Route']),
-        'Gestion'       : st.column_config.SelectboxColumn('Gestion', options=['3rd party','Brand-managed','Owner-operated']),
         'Meeting (m2)'  : st.column_config.NumberColumn('Meeting m2', min_value=0, format='%d'),
     }
     if dea.has_chambres:
@@ -4992,12 +4999,12 @@ with tab_malm:
                 dea.df[col] = [_loc_dummies.loc[h, col] if h in _loc_dummies.index else 0
                                for h in dea.hotels]
                 _tobit_cs[col] = col.replace('loc_', 'Loc. ')
-        if 'Gestion' in _cs_profile.columns:
-            _gest_dummies = pd.get_dummies(_cs_profile['Gestion'], prefix='gest')
-            for col in _gest_dummies.columns:
-                dea.df[col] = [_gest_dummies.loc[h, col] if h in _gest_dummies.index else 0
+        if 'Affiliation' in _cs_profile.columns:
+            _aff_dummies = pd.get_dummies(_cs_profile['Affiliation'], prefix='aff')
+            for col in _aff_dummies.columns:
+                dea.df[col] = [_aff_dummies.loc[h, col] if h in _aff_dummies.index else 0
                                for h in dea.hotels]
-                _tobit_cs[col] = col.replace('gest_', 'Gestion: ')
+                _tobit_cs[col] = col.replace('aff_', 'Affiliation: ')
 
     _all_tobit = {**_tobit_avail, **_tobit_cs}
 
