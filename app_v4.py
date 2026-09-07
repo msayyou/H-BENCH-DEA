@@ -1876,16 +1876,14 @@ with st.sidebar:
     )
     _sample_choice = st.radio(
         "Ou charger un jeu de données de référence",
-        options=['aucun', 'melia', 'atream'],
+        options=['aucun', 'atream'],
         format_func=lambda x: {
             'aucun' : "Aucun (upload uniquement)",
-            'melia' : "📋 Meliá Group Espagne (24 hôtels)",
             'atream': "📋 Atream / Ibis Styles France (30 hôtels — démo)",
         }[x],
         index=(1 if uploaded_file is None else 0),
         horizontal=False,
     )
-    use_sample = _sample_choice == 'melia'
     use_sample_atream = _sample_choice == 'atream'
     if use_sample_atream:
         st.session_state['_force_illustrative'] = True
@@ -1957,54 +1955,6 @@ def load_sample_atream() -> pd.DataFrame:
         'guest_facing_fte': [62, 52, 50, 48, 58, 59, 57, 51, 52, 47, 50, 56, 65, 56, 45, 49, 50, 45, 42, 46, 52, 50, 51, 52, 51, 48, 46, 49, 44, 44],
         'repeat_guest_rate': [16.1, 24.3, 21.8, 17.8, 23.2, 25.9, 22.9, 15.2, 14.4, 20.2, 19.3, 15.6, 23.7, 13.8, 25, 13.5, 21.4, 17.6, 19.3, 19.5, 12.2, 20.1, 13.7, 23.4, 17.5, 16.7, 25, 21.8, 15.6, 17.8],
         'room_nights_sold': [63160, 49384, 53319, 45234, 55801, 58327, 60897, 53962, 47589, 45234, 49384, 51804, 67321, 62780, 37668, 39913, 42201, 44534, 37197, 39420, 50589, 53053, 44534, 46910, 48749, 46351, 42201, 44534, 37197, 39420],
-    }
-    return pd.DataFrame(d).set_index('hotel_name')
-
-def load_sample() -> pd.DataFrame:
-    """
-    Portefeuille de référence — Meliá Group Espagne (24 hôtels)
-    DEA-H v4 · REIV Hospitality
-    Satisfaction /5→/10 · couts_op_ex M€ · financiers k€
-
-    Ne contient QUE les colonnes de base DEA-H (celles qu'un vrai client
-    fournirait) + les colonnes N-1 pour Malmquist. Les colonnes multi-module
-    (rooms_revenue, fb_revenue, total_revenue, energy_kwh, water_m3,
-    co2_tonnes, adr, trevpar, revenue_per_fte, book_value_assets, ebitda...)
-    ont été retirées : elles étaient des reformulations à ratio fixe de
-    revpar/nb_chambres/surface_m2 (ex. energy_kwh = 228,125 × surface_m2 pour
-    les 24 hôtels, sans exception), pas de vraies données Meliá — leur
-    présence faisait passer artificiellement les modules Financier USALI,
-    Capital & Actifs, Main-d'œuvre, Revenue Management et ESG en "disponible"
-    sans qu'aucune vraie donnée indépendante ne les alimente. Avec ce jeu de
-    données, seuls Opérationnel Global et Qualité & Satisfaction sont
-    honnêtement calculables — comme sur un vrai fichier client non enrichi.
-    """
-    d = {
-        'hotel_name': ['Meliá South Beach', 'Meliá Calviá Beach', 'Sol Wave House All Suites', 'Sol Barbados', 'Sol House The Studio', 'Sol Guadalupe', 'Innside by Meliá Calviá Beach', 'ME Marbella', 'Meliá Madrid Princesa', 'Meliá Galgos (Madrid)', 'Meliá Castilla (Madrid - Part)', 'Tryp Madrid Gran Vía', 'Tryp Madrid Chamartín', 'Tryp Madrid Atocha', 'Meliá Atlanterra (Cadix)', 'Meliá Sol y Nieve (Sierra Nevada)', 'Sol Pelicanos Ocas (Benidorm)', 'Meliá Puerto de la Cruz (Ténérife)', 'Sol Lanzarote', 'Meliá Sierra Nevada', 'Meliá María Pita (La Corogne)', 'Meliá San Sebastián Orly', 'Meliá Alicante', 'Sol Príncipe (Torremolinos)'],
-        'nb_chambres': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
-        'nb_employes': [85, 110, 65, 120, 95, 100, 90, 140, 115, 130, 160, 55, 60, 50, 95, 85, 210, 95, 110, 75, 60, 40, 170, 220],
-        'couts_op_ex': [3.84, 4.92, 2.88, 5.52, 4.56, 4.68, 4.2, 6.24, 5.16, 5.88, 7.32, 2.52, 2.76, 2.28, 4.32, 4.08, 9.36, 3.96, 4.8, 3.48, 2.64, 1.92, 8.16, 9.72],
-        'revpar': [145, 138, 120, 115, 125, 98, 130, 260, 155, 140, 165, 110, 95, 118, 142, 135, 85, 90, 105, 128, 88, 150, 122, 95],
-        'satisfaction': [9.0, 8.6, 8.2, 8.4, 8.8, 8.0, 9.2, 9.4, 8.8, 8.4, 8.6, 7.8, 8.0, 8.2, 9.0, 8.6, 8.0, 8.2, 8.6, 8.4, 8.8, 9.2, 8.4, 8.2],
-        'taux_occupation': [82, 79, 85, 88, 81, 76, 84, 73, 78, 75, 80, 83, 74, 81, 86, 68, 92, 84, 87, 65, 72, 79, 83, 89],
-        'surface_m2': [9600, 12640, 7360, 13680, 11600, 12120, 10880, 7200, 10960, 14240, 16000, 7000, 7960, 5960, 11520, 10320, 31760, 12000, 13720, 8840, 7320, 4080, 21800, 31960],
-        'gop': [4740.6, 5727.3, 3122.5, 5731.0, 4851.0, 3730.7, 4923.9, 5654.9, 5480.3, 6190.7, 8768.8, 2645.5, 2316.5, 2363.9, 5838.8, 3927.0, 10298.6, 3758.2, 5205.4, 3049.9, 1925.8, 2004.3, 9163.3, 11211.9],
-        # CAPEX différenciés par catégorie (k€/an): 3★=0.90, 4★=1.75, 4★Sup=2.40, 5★=3.80 k€/ch
-        # (taux benchmark secteur — CAPEX réels par hôtel non disponibles ; même
-        # réserve que ci-dessus, conservé car colonne DEA-H de base préexistante,
-        # pas ajoutée pour le système multi-module)
-        'capex_annuel': [576.0, 553.0, 322.0, 598.5, 507.5, 530.2, 476.0, 684.0, 1041.2, 623.0, 700.0, 157.5, 179.1, 260.8, 504.0, 451.5, 714.6, 525.0, 600.2, 386.8, 320.2, 178.5, 953.8, 1398.2],
-        'classement_etoiles': [5, 4, 4, 4, 4, 3, 5, 5, 5, 4, 5, 3, 3, 4, 5, 4, 3, 3, 4, 4, 3, 5, 4, 3],
-        'categorie': ['4★ Sup','4★','4★','4★','4★','3★','4★','5★','5★','4★','4★','3★','3★','4★','4★','4★','3★','4★','4★','4★','3★','4★','4★','4★'],
-        # Saisonnalité : 1=resort/côtier/montagne (haute saison), 0=urbain/année ronde
-        # Réf. : Pulina & Santoni (2018) ; Cracolici et al. (2008)
-        'saison_dummy': [1,1,1,1,1,1,1,1,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,1],
-        'nb_chambres_n1': [240, 316, 184, 342, 290, 303, 272, 180, 274, 356, 400, 175, 199, 149, 288, 258, 794, 300, 343, 221, 183, 102, 545, 799],
-        'nb_employes_n1': [86, 108, 65, 121, 94, 101, 87, 143, 115, 126, 163, 55, 58, 49, 92, 82, 208, 92, 110, 72, 61, 40, 164, 212],
-        'couts_op_ex_n1': [3.728, 5.037, 2.825, 5.564, 4.566, 4.593, 4.227, 6.33, 5.123, 6.011, 7.184, 2.48, 2.695, 2.265, 4.406, 4.004, 9.331, 4.049, 4.796, 3.501, 2.641, 1.929, 7.978, 9.832],
-        'revpar_n1': [136.0, 131.5, 115.7, 106.6, 114.0, 89.9, 124.8, 241.7, 142.3, 131.5, 154.3, 103.9, 86.8, 109.4, 135.2, 123.2, 80.2, 86.0, 96.6, 116.7, 83.2, 140.4, 117.1, 91.8],
-        'satisfaction_n1': [9.0, 8.5, 8.2, 8.4, 8.7, 8.0, 9.2, 9.4, 8.6, 8.4, 8.5, 7.8, 7.9, 8.0, 9.0, 8.4, 7.8, 8.0, 8.5, 8.2, 8.7, 9.2, 8.2, 8.0],
-        'taux_occupation_n1': [79.2, 75.1, 80.2, 82.7, 75.8, 71.1, 82.9, 70.5, 76.3, 73.3, 74.9, 79.0, 72.6, 78.4, 83.0, 64.6, 87.0, 81.1, 84.5, 64.1, 67.2, 77.0, 77.4, 85.9],
     }
     return pd.DataFrame(d).set_index('hotel_name')
 
@@ -2116,9 +2066,6 @@ if uploaded_file is not None:
     if st.session_state.get('_csv_hash') != _new_hash:
         st.session_state['module_results'] = {}
         st.session_state['_csv_hash'] = _new_hash
-elif use_sample:
-    df = load_sample()
-    st.sidebar.info("📋 Données d'exemple Meliá chargées")
 elif use_sample_atream:
     df = load_sample_atream()
     st.sidebar.info("📋 Démo Atream / Ibis Styles France chargée — données Financier/Commercial/RH illustratives")
