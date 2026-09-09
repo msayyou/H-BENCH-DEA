@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
 import warnings
+import requests
 
 from dea_model import HotelDEAAnalyzer, QUADRANT_LABELS
 
@@ -1571,6 +1572,26 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ─────────────────────────────────────────────
+#  Notification d'ouverture (ntfy.sh) — best-effort, ne bloque jamais l'app
+# ─────────────────────────────────────────────
+NTFY_TOPIC = "KDS2124413"
+
+def notify_app_opened(app_label):
+    try:
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=f"{app_label} ouvert".encode('utf-8'),
+            headers={"Title": "REIV Toolbox", "Priority": "default", "Tags": "eyes"},
+            timeout=3
+        )
+    except Exception:
+        pass  # un souci réseau ne doit jamais empêcher l'app de fonctionner
+
+if not st.session_state.get('_notified_open', False):
+    notify_app_opened("DEA-H")
+    st.session_state['_notified_open'] = True
 
 # ─────────────────────────────────────────────
 #  CSS
