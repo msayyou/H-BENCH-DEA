@@ -50,6 +50,16 @@ def plotly_to_png_bytes(fig, width=700, height=400, scale=2):
         return None
 
 
+_FICHE_MODULE_LABELS = {
+    "financial_usali"    : "💰 Financier USALI",
+    "capital_assets"     : "🏗️ Capital & Actifs",
+    "workforce"          : "👥 Main-d'œuvre",
+    "revenue_management" : "📈 Revenue Management",
+    "esg"                : "🌿 ESG / Environnemental",
+    "quality"             : "⭐ Qualité & Satisfaction",
+}
+
+
 def generate_fiche_actif_pdf(
     hotel: str,
     dea,
@@ -57,10 +67,19 @@ def generate_fiche_actif_pdf(
     avg_salary: float = 35_000,
     revpar_value: float = 1,
     jours_exploit: int = 365,
+    module_results: dict = None,
 ) -> bytes:
     """
     Génère un PDF Fiche Actif pour un hôtel.
     Retourne bytes prêts pour st.download_button.
+
+    module_results : dict {module_id: résultat run_multi_module}, optionnel.
+    Quand fourni, ajoute une section "Diagnostic Multi-Module" reprenant le
+    score d'efficience de cet hôtel sur chaque module actif (Financier USALI,
+    Capital & Actifs, Main-d'œuvre, Revenue Management, ESG, Qualité) — les
+    mêmes modules que ceux affichés dans le rapport Portfolio. Un module sans
+    donnée réelle pour cet hôtel (result.error, scores vide, ou hôtel absent
+    du DataFrame scores) est simplement omis, pas affiché à zéro.
     """
     try:
         from reportlab.lib.pagesizes import A4
@@ -196,6 +215,59 @@ def generate_fiche_actif_pdf(
         ("ALIGN",       (3,0), (3,-1), "RIGHT"),
     ]))
     story.append(raw_table)
+    story.append(Spacer(1, 6))
+
+    # ── Diagnostic Multi-Module (Financier / Capital / RH / Commercial / ESG / Qualité) ──
+    _mr_fiche = module_results or {}
+    _mm_rows = []
+    for _mid, _lbl in _FICHE_MODULE_LABELS.items():
+        _res = _mr_fiche.get(_mid)
+        if _res is None or getattr(_res, "error", None):
+            continue
+        _sc = getattr(_res, "scores", None)
+        if _sc is None or _sc.empty or "dmu_name" not in _sc.columns:
+            continue
+        _row = _sc.loc[_sc["dmu_name"] == hotel]
+        if _row.empty:
+            continue
+        _eff = float(_row["efficiency"].iloc[0])
+        _mm_rows.append((_lbl, _eff))
+
+    story.append(Paragraph("Diagnostic Multi-Module", h2_s))
+    if not _mm_rows:
+        story.append(Paragraph(
+            "Non calculable : aucun module Financier / Capital / RH / Commercial / ESG / "
+            "Qualité actif avec de vraies données pour cet hôtel au moment de la génération. "
+            "Le diagnostic reste limité à la dimension opérationnelle ci-dessus tant que ces "
+            "données ne sont pas fournies via l'enrichissement.", body_s))
+    else:
+        mm_data = [["Module", "Score efficience", "Lecture"]]
+        for _lbl, _eff in _mm_rows:
+            _lecture_txt = ("Sur la frontière" if _eff >= 0.90 else
+                             "Marge d'amélioration modérée" if _eff >= 0.80 else
+                             "Écart significatif")
+            mm_data.append([_lbl, f"{_eff:.1%}", _lecture_txt])
+        mm_table = Table(mm_data, colWidths=[6.5*cm, 3.5*cm, 5.6*cm])
+        mm_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), NAVY),
+            ("TEXTCOLOR",  (0,0), (-1,0), WHITE),
+            ("FONTNAME",   (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTNAME",   (0,1), (-1,-1), "Helvetica"),
+            ("FONTSIZE",   (0,0), (-1,-1), 8),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [WHITE, LGRAY]),
+            ("GRID",       (0,0), (-1,-1), 0.3, colors.lightgrey),
+            ("ALIGN",      (1,0), (1,-1), "RIGHT"),
+        ]))
+        for _i, (_lbl, _eff) in enumerate(_mm_rows, start=1):
+            mm_table.setStyle(TableStyle([
+                ("TEXTCOLOR", (1,_i), (1,_i), score_color(_eff)),
+                ("FONTNAME",  (1,_i), (1,_i), "Helvetica-Bold"),
+            ]))
+        story.append(mm_table)
+        story.append(Paragraph(
+            "Scores calculés par le système Multi-Module (modules_config.py / run_multi_module), "
+            "uniquement sur colonnes réelles uploadées — les colonnes reformulées par l'app "
+            "(proxy_cols) ne peuvent pas seules satisfaire un module.", small_s))
     story.append(Spacer(1, 6))
 
     # Slacks & upside
@@ -3730,6 +3802,7 @@ with tab_fiche:
                     avg_salary=avg_salary,
                     revpar_value=revpar_value,
                     jours_exploit=jours_exploit,
+                    module_results=st.session_state.get('module_results', {}),
                 )
                 if _pdf_bytes:
                     st.download_button(
