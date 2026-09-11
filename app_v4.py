@@ -1145,7 +1145,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             gop   = float(cap_input.loc[h, 'gop (k€)'] or 0)
             # CAPEX/chambre et Rendement exigent un vrai nombre de chambres —
             # plus de repli RevPAR x lits x jours (proxy non fiable, cf. audit
-            # portefeuille Ibis Atream : rapport chambres/lits de 1:1 à 7:1
+            # portefeuille compset générique : rapport chambres/lits de 1:1 à 7:1
             # selon l'hôtel, aucune conversion fiable possible).
             if dea.has_chambres:
                 lits = _v(h, 'nb_chambres')
@@ -1639,11 +1639,28 @@ warnings.filterwarnings('ignore')
 #  Config page
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="DEA-H — Asset Manager Benchmarking",
+    page_title="DEA-H — Asset Manager Benchmarking · ARMEN AM",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+def _check_password():
+    """Porte d'accès par mot de passe, indépendante du statut public/privé Streamlit Cloud."""
+    def _pwd_entered():
+        if st.session_state.get("_pwd_input") == st.secrets.get("APP_PASSWORD", "reiv2026"):
+            st.session_state["_authenticated"] = True
+            del st.session_state["_pwd_input"]
+        else:
+            st.session_state["_authenticated"] = False
+    if st.session_state.get("_authenticated"):
+        return True
+    st.text_input("🔒 Mot de passe", type="password", on_change=_pwd_entered, key="_pwd_input")
+    if st.session_state.get("_authenticated") is False:
+        st.error("Mot de passe incorrect")
+    st.stop()
+
+_check_password()
 
 # ─────────────────────────────────────────────
 #  Notification d'ouverture (ntfy.sh) — best-effort, ne bloque jamais l'app
@@ -1790,7 +1807,7 @@ hr { border-color: #e2e8f0 !important; }
 # ─────────────────────────────────────────────
 #  Titre
 # ─────────────────────────────────────────────
-st.markdown('<h1 class="main-header">DEA-H — Asset Manager Benchmarking</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">DEA-H — Asset Manager Benchmarking · édition ARMEN AM</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Analyse BCC/CCR &middot; TOPSIS &middot; K-means &middot; Metafrontière &middot; Multi-Module DEA</p>', unsafe_allow_html=True)
 st.markdown('<div class="reiv-badge"><span>REIV Hospitality · v3.9</span></div>', unsafe_allow_html=True)
 
@@ -1846,7 +1863,7 @@ with st.sidebar:
              "approximations plutôt que des chiffres confirmés par le client. Affiche "
              "un bandeau d'avertissement dans l'app et sur le rapport PDF, pour éviter "
              "qu'un résultat basé sur des données illustratives soit lu comme un "
-             "résultat vérifié. Coché automatiquement pour le jeu de démo Atream.",
+             "résultat vérifié. Coché automatiquement pour le jeu de démo Grenoble (ARMEN AM).",
     )
 
     _ft_int = st.slider(
@@ -1969,21 +1986,26 @@ with st.sidebar:
     )
     _sample_choice = st.radio(
         "Ou charger un jeu de données de référence",
-        options=['aucun', 'atream'],
+        options=['aucun', 'armen_grenoble'],
         format_func=lambda x: {
-            'aucun' : "Aucun (upload uniquement)",
-            'atream': "📋 Atream / Ibis Styles France (30 hôtels — démo)",
+            'aucun'         : "Aucun (upload uniquement)",
+            'armen_grenoble': "🏨 Maison Barbillon & compset Grenoble (ARMEN AM)",
         }[x],
         index=(1 if uploaded_file is None else 0),
         horizontal=False,
     )
-    use_sample_atream = _sample_choice == 'atream'
-    if use_sample_atream:
+    use_sample_armen  = _sample_choice == 'armen_grenoble'
+    if use_sample_armen:
         st.session_state['_force_illustrative'] = True
         st.caption(
-            "⚠️ Base opérationnelle sur sources publiques réelles (ces hôtels existent). "
-            "Colonnes Financier/Commercial/RH/ESG **illustratives**, construites à partir "
-            "de repères sectoriels Ibis Styles 3★ urbain, pas des chiffres Atream réels."
+            "⚠️ Base opérationnelle (chambres/ETP/charges/RevPAR/satisfaction/occupation, "
+            "N et N-1) construite sur sources publiques réelles pour ces 12 hôtels grenoblois "
+            "(dont Maison Barbillon, géré par ARMEN AM). Colonnes Financier USALI/Capital/"
+            "Main-d'œuvre/Revenue Management/ESG **illustratives** — reformulées à partir "
+            "du RevPAR, des chambres et des effectifs via des repères sectoriels génériques "
+            "(mix Rooms/F&B ~65/35, coûts départementaux USALI, ~40k€/ETP chargé, ~19 000 kWh/"
+            "chambre/an), **pas des données réelles USALI ou ESG mesurées de ces hôtels**. "
+            "À ne présenter qu'accompagné de cette réserve."
         )
 
 # ─────────────────────────────────────────────
@@ -1992,62 +2014,69 @@ with st.sidebar:
 NUMERIC_COLS = ['nb_employes', 'couts_op_ex', 'revpar', 'satisfaction', 'taux_occupation']
 OPTIONAL_NUMERIC_COLS = ['nb_chambres']  # jamais requis — non fiable sans vraie donnée
 
-def load_sample_atream() -> pd.DataFrame:
+
+
+def load_sample_armen_grenoble() -> pd.DataFrame:
     """
-    Portefeuille de référence — Atream / Ibis Styles France (30 hôtels)
-    DEA-H v4 · REIV Hospitality
+    Portefeuille de référence — Maison Barbillon & compset Grenoble Gare (12 hôtels)
+    DEA-H v4 · REIV Hospitality · édition ARMEN AM
 
     Base opérationnelle (chambres/ETP/charges/RevPAR/satisfaction/occupation/
-    surface/CAPEX/GOP/classement) reconstituée à partir de sources publiques
-    pour ces hôtels réels. Colonnes Financier/Commercial/RH/ESG (total_revenue,
-    rooms_revenue, marketing_cost, payroll_total, energy_kwh...) ILLUSTRATIVES —
-    construites à partir de repères sectoriels Ibis Styles 3★ urbain (TRevPAR
-    110-130€, ADR 95-115€, marge EBITDA 25-30%, répartition Rooms/F&B/Autres
-    70/20/10%, énergie 250-350 kWh/chambre/an) avec variance simulée par hôtel —
-    PAS les chiffres réels du portefeuille Atream. `illustrative_data` est coché
-    automatiquement quand ce jeu est sélectionné pour que le bandeau
+    surface/CAPEX/GOP, N et N-1) reconstituée à partir de sources publiques pour
+    ces hôtels réels du quartier gare de Grenoble, dont Maison Barbillon (géré
+    par ARMEN AM). Colonnes Financier USALI/Capital & Actifs/Main-d'œuvre/
+    Revenue Management/ESG (total_revenue, rooms_revenue, payroll_total,
+    energy_kwh...) ILLUSTRATIVES — reformulées à partir du RevPAR, des chambres
+    et des effectifs via des repères sectoriels génériques (mix Rooms/F&B
+    ~65/35 Min 2009, coûts départementaux USALI, ~40k€/ETP chargé hôtellerie FR,
+    ~19 000 kWh/chambre/an) avec variance par hôtel — PAS des données réelles
+    USALI ou de consommation mesurées de ces établissements. `illustrative_data`
+    est coché automatiquement quand ce jeu est sélectionné pour que le bandeau
     d'avertissement s'affiche dans l'app et le rapport PDF sans action manuelle.
     """
     d = {
-        'hotel_name': ['Ibis Styles Paris Bercy', 'Ibis Styles Paris Crimée La Villette', 'Ibis Styles Paris Tolbiac Bibliothèque', 'Ibis Styles Paris Nation Porte de Montreuil', 'Ibis Styles Paris Maine Montparnasse', "Ibis Styles Paris Gare de l'Est", 'Ibis Styles Paris Gare du Nord', 'Ibis Styles Paris République', 'Ibis Styles Paris Montmartre', 'Ibis Styles Paris Pigalle', 'Ibis Styles Paris Buttes-Chaumont', 'Ibis Styles Paris Boulogne Marcel Sembat', 'Ibis Styles Paris Roissy CDG', 'Ibis Styles Paris Orly Tech Airport', 'Ibis Styles Lille Centre Grand Place', 'Ibis Styles Lille Centre Gare Beffroi', 'Ibis Styles Bordeaux Gare Saint-Jean', 'Ibis Styles Bordeaux Meriadeck', 'Ibis Styles Marseille Timone', 'Ibis Styles Marseille Castellane', 'Ibis Styles Nice Centre Gare', 'Ibis Styles Nice Aéroport Arenas', 'Ibis Styles Strasbourg Centre Gare', 'Ibis Styles Strasbourg Petite France', 'Ibis Styles Lyon Centre Part-Dieu', 'Ibis Styles Lyon Confluence', 'Ibis Styles Toulouse Centre Capitole', 'Ibis Styles Toulouse Labège', 'Ibis Styles Rennes Centre Gare', 'Ibis Styles Rennes Saint-Grégoire'],
-        'nb_chambres': [350, 280, 300, 260, 310, 320, 330, 300, 270, 260, 280, 290, 360, 340, 220, 230, 240, 250, 220, 230, 280, 290, 250, 260, 270, 260, 240, 250, 220, 230],
-        'nb_employes': [55, 45, 48, 42, 50, 52, 54, 48, 43, 40, 44, 46, 60, 58, 35, 36, 38, 40, 34, 35, 45, 46, 40, 41, 43, 42, 38, 39, 34, 35],
-        'couts_op_ex': [4800000, 4100000, 4300000, 3900000, 4500000, 4700000, 4800000, 4400000, 4000000, 3800000, 4100000, 4200000, 5200000, 5000000, 3400000, 3500000, 3600000, 3700000, 3300000, 3400000, 4200000, 4300000, 3700000, 3800000, 4000000, 3900000, 3600000, 3700000, 3300000, 3400000],
-        'revpar': [115, 105, 110, 100, 115, 120, 125, 115, 105, 100, 105, 110, 130, 125, 95, 95, 100, 105, 90, 95, 115, 120, 105, 110, 115, 110, 100, 105, 90, 95],
-        'satisfaction': [8.2, 8, 8.1, 7.9, 8.3, 8.4, 8.5, 8.2, 8, 7.9, 8, 8.1, 8.4, 8.3, 7.8, 7.9, 8, 8.1, 7.7, 7.8, 8.3, 8.4, 8.1, 8.2, 8.3, 8.2, 8, 8.1, 7.7, 7.8],
-        'taux_occupation': [84, 82, 83, 81, 84, 85, 86, 84, 82, 81, 82, 83, 87, 86, 80, 81, 82, 83, 79, 80, 84, 85, 83, 84, 84, 83, 82, 83, 79, 80],
-        'surface_m2': [6000, 4800, 5000, 4500, 5200, 5800, 6000, 5200, 4600, 4400, 4700, 4900, 6500, 6200, 4200, 4300, 4500, 4800, 4000, 4200, 5000, 5300, 4600, 4700, 5000, 4800, 4500, 4700, 4000, 4200],
-        'capex_annuel': [420000, 350000, 360000, 330000, 380000, 400000, 410000, 370000, 340000, 330000, 350000, 360000, 450000, 430000, 300000, 310000, 320000, 340000, 300000, 310000, 360000, 380000, 330000, 340000, 350000, 340000, 320000, 330000, 300000, 310000],
-        'gop': [3000000, 2450000, 2600000, 2300000, 2750000, 2900000, 3050000, 2700000, 2350000, 2250000, 2400000, 2500000, 3300000, 3150000, 2000000, 2050000, 2200000, 2350000, 1900000, 2000000, 2600000, 2750000, 2300000, 2350000, 2550000, 2450000, 2200000, 2300000, 1900000, 2000000],
-        'classement_etoiles': [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-        'total_revenue': [8757883, 6798505, 8003591, 6865729, 7783962, 8086702, 8449035, 7489954, 6612165, 6284841, 6937155, 7559006, 9377705, 8265739, 5576988, 5684226, 6504064, 6204594, 5218586, 5917307, 7418877, 6941372, 6054151, 7177646, 7116130, 6329841, 5725028, 6787991, 5284948, 6077928],
-        'rooms_revenue': [5947478, 4603268, 5500868, 5009236, 5628583, 5611363, 5905875, 5118634, 4511481, 4268036, 4822017, 5420563, 6813841, 5752128, 4041643, 3852768, 4526178, 4247045, 3503237, 4261053, 5000323, 4762475, 4246382, 5116226, 5157771, 4302393, 3931377, 4896178, 3563112, 4409537],
-        'fb_revenue': [1831273, 1281518, 1831222, 1505654, 1770851, 1424877, 1480271, 1638053, 1371363, 1409690, 1234120, 1333409, 2066846, 1660587, 1221918, 1145940, 1298862, 1163982, 982660, 1291748, 1589123, 1459771, 1375503, 1608511, 1611092, 1155196, 1305879, 1549698, 1064917, 1115908],
-        'other_dept_revenue': [979131, 913719, 671501, 350839, 384528, 1050463, 1062889, 733266, 729322, 607116, 881019, 805034, 497018, 853024, 313427, 685518, 679024, 793568, 732689, 364506, 829430, 719126, 432266, 452909, 347267, 872252, 487772, 342115, 656919, 552484],
-        'ebitda': [2220999, 1977005, 2048119, 1813926, 2004370, 2278024, 2155349, 2240994, 1950589, 1824489, 2049929, 2101404, 2409133, 2206952, 1466190, 1488699, 1897236, 1693854, 1365182, 1723711, 1948197, 1975514, 1553495, 1898487, 1974726, 1869202, 1467325, 1781169, 1475029, 1529815],
-        'rooms_cost': [1746180, 1188103, 1550145, 1395573, 1449923, 1381518, 1619982, 1665092, 1461720, 1086642, 1327983, 1435365, 1718451, 1493252, 1030215, 966660, 1264162, 1086394, 1046066, 1271498, 1237080, 1464937, 1367335, 1418218, 1609225, 1246403, 1141279, 1228451, 993396, 1207331],
-        'fb_cost': [1289033, 935252, 1375064, 1114485, 1217992, 951960, 1024051, 1239515, 983953, 1070237, 882396, 924319, 1473868, 1159422, 941243, 778552, 936219, 830501, 710954, 990900, 1099514, 1014395, 991738, 1137378, 1072826, 792927, 960605, 1051470, 731385, 792852],
-        'other_dept_cost': [500924, 573633, 356164, 176998, 210221, 569141, 707671, 486669, 459910, 422613, 543324, 526895, 255716, 549689, 192475, 349683, 432878, 438525, 476321, 232045, 535729, 433849, 292817, 316946, 224508, 594265, 328076, 206808, 407421, 351656],
-        'undistributed_expenses': [625920, 501430, 555990, 498030, 580950, 515590, 526560, 635360, 592000, 529720, 632630, 548100, 594880, 506000, 482800, 392350, 572040, 583490, 460350, 481440, 471660, 549970, 526140, 514520, 508400, 623220, 406800, 521330, 331980, 380460],
-        'fixed_charges': [394560, 462890, 354320, 351390, 518850, 471880, 390720, 411840, 340400, 383800, 431320, 477540, 438880, 566000, 290360, 345450, 362160, 512080, 405900, 318920, 522480, 464400, 347430, 386080, 500800, 417300, 346680, 505050, 323730, 434520],
-        'book_value_assets': [26442624, 18661942, 23677511, 17837703, 21672796, 22466914, 30788279, 23528410, 21734172, 20099746, 23898605, 23833553, 30792197, 27383176, 16298256, 18176133, 22343405, 21916333, 20122908, 16143224, 25830146, 21019291, 23261225, 20676587, 23511435, 19178086, 18665258, 22609018, 17779868, 20306080],
-        'revenue_per_fte': [156391, 141636, 186130, 152572, 146867, 147031, 168981, 156041, 169543, 146159, 161329, 184366, 180340, 140097, 164029, 162406, 180668, 151332, 144961, 151726, 168611, 165271, 155235, 170896, 161730, 143860, 146796, 178631, 165155, 168831],
-        'payroll_total': [2168639, 1903088, 1831121, 1986564, 2191633, 2156557, 1958641, 1835128, 1726079, 1638900, 1816948, 1703385, 2349163, 2398467, 1407686, 1411189, 1551161, 1874739, 1461927, 1594541, 1806661, 1662948, 1489748, 1612218, 1689240, 1703932, 1621108, 1676499, 1381011, 1427103],
-        'hours_worked': [90144, 78126, 70575, 71507, 85110, 87291, 80901, 75934, 63668, 70862, 69516, 66538, 82722, 95797, 53892, 56525, 57900, 65668, 59362, 61906, 70995, 69236, 61630, 66659, 72374, 70573, 64224, 61256, 52540, 59324],
-        'training_cost': [59421, 40726, 36073, 37149, 51503, 44209, 30163, 35234, 38319, 40481, 27799, 38497, 60373, 54445, 40964, 24978, 31333, 38057, 25145, 43850, 45709, 48225, 33370, 44336, 28548, 27944, 44905, 39062, 30520, 28114],
-        'trevpar': [116.5, 112.9, 124.6, 122.9, 117.2, 117.8, 119.3, 116.6, 113.9, 112.5, 115.2, 121.1, 121.2, 113.2, 118.4, 115.4, 126.4, 115.6, 110.8, 120.1, 123.2, 111.2, 112.8, 128.5, 122.6, 113.3, 111.2, 126.5, 112.2, 123.3],
-        'adr': [136.9, 128, 132.5, 123.5, 136.9, 141.2, 145.3, 136.9, 128, 123.5, 128, 132.5, 149.4, 145.3, 118.8, 117.3, 122, 126.5, 113.9, 118.8, 136.9, 141.2, 126.5, 131, 136.9, 132.5, 122, 126.5, 113.9, 118.8],
-        'marketing_cost': [240842, 212793, 311340, 225196, 343273, 206211, 300786, 226197, 189108, 223112, 234476, 266077, 358228, 217389, 210252, 181327, 169756, 155115, 206134, 214207, 298981, 176311, 205841, 220354, 244795, 188629, 243314, 175130, 156963, 251626],
-        'ota_gds_cost': [321414, 323609, 382572, 385167, 394647, 454473, 501873, 380490, 355073, 364521, 246269, 383997, 321655, 492638, 301157, 173369, 220488, 256870, 257276, 288765, 359816, 304032, 236717, 417021, 286780, 239268, 175758, 363157, 197657, 224276],
-        'sales_fte': [3, 2, 2, 1, 2, 3, 3, 3, 2, 2, 1, 2, 3, 3, 1, 1, 1, 2, 1, 2, 2, 2, 1, 2, 2, 2, 1, 1, 2, 1],
-        'promo_budget': [117892, 76606, 121796, 87781, 145376, 67988, 132105, 88081, 87027, 105822, 107812, 108214, 176786, 107455, 99071, 54960, 76085, 62139, 96285, 93415, 94328, 87027, 75914, 77807, 109619, 90070, 107520, 84763, 69205, 113760],
-        'energy_kwh': [63388, 54357, 58783, 46656, 57807, 51742, 53566, 60492, 55199, 50890, 44094, 50924, 57655, 52096, 33109, 43647, 38854, 39704, 43756, 40355, 43683, 50436, 41396, 46068, 55273, 49720, 47879, 46239, 36215, 37732],
-        'water_m3': [2044, 1234, 1451, 1438, 1759, 1482, 1401, 1734, 1273, 1148, 1499, 1539, 1695, 1360, 1055, 985, 980, 982, 1176, 1259, 1509, 1260, 981, 1210, 1408, 1231, 1216, 1043, 1074, 1123],
-        'co2_tonnes': [26, 24.2, 28.7, 24.3, 18.9, 23.2, 24.1, 29.2, 20.1, 17.5, 21.7, 27.8, 34.7, 23.5, 20.3, 18.5, 15.6, 19.6, 18.3, 13.5, 19.3, 20.2, 22.9, 17.2, 18.7, 19.5, 18.5, 17.7, 13.1, 22.1],
-        'maintenance_cost': [108906, 127715, 137808, 139524, 154280, 109840, 165804, 119473, 149396, 101838, 126455, 153108, 156375, 174494, 95340, 106950, 133856, 102952, 123720, 123907, 111924, 166858, 132033, 150008, 108570, 120632, 80000, 99132, 115470, 89125],
-        'guest_facing_fte': [62, 52, 50, 48, 58, 59, 57, 51, 52, 47, 50, 56, 65, 56, 45, 49, 50, 45, 42, 46, 52, 50, 51, 52, 51, 48, 46, 49, 44, 44],
-        'repeat_guest_rate': [16.1, 24.3, 21.8, 17.8, 23.2, 25.9, 22.9, 15.2, 14.4, 20.2, 19.3, 15.6, 23.7, 13.8, 25, 13.5, 21.4, 17.6, 19.3, 19.5, 12.2, 20.1, 13.7, 23.4, 17.5, 16.7, 25, 21.8, 15.6, 17.8],
-        'room_nights_sold': [63160, 49384, 53319, 45234, 55801, 58327, 60897, 53962, 47589, 45234, 49384, 51804, 67321, 62780, 37668, 39913, 42201, 44534, 37197, 39420, 50589, 53053, 44534, 46910, 48749, 46351, 42201, 44534, 37197, 39420],
+        'hotel_name': ['Maison Barbillon', 'Hôtel Europole', 'Novotel Grenoble Centre', 'greet Hotel Grenoble Centre Gare', 'Hôtel Terminus', 'Campanile Grenoble Centre Gare', 'RockyPop Grenoble Hotel', 'Le Grand Hôtel Grenoble (BW Premier)', "Hôtel d'Angleterre Hyper-Centre", "Hôtel de l'Europe", "Residhotel Le Central'Gare", 'Ibis Grenoble Centre Bastille'],
+        'nb_chambres': [48, 71, 118, 67, 42, 68, 109, 66, 62, 39, 73, 61],
+        'nb_employes': [9, 14, 28, 11, 7, 12, 26, 18, 11, 6, 8, 10],
+        'couts_op_ex': [720000, 1080000, 2350000, 980000, 560000, 920000, 1950000, 1380000, 970000, 530000, 910000, 900000],
+        'revpar': [68.0, 64.5, 89.0, 61.0, 59.0, 55.5, 82.0, 94.0, 66.0, 58.0, 57.0, 62.5],
+        'satisfaction': [8.4, 8.0, 8.3, 8.2, 8.6, 7.4, 8.5, 8.7, 8.0, 8.1, 7.8, 7.9],
+        'taux_occupation': [69.5, 67.0, 71.0, 68.0, 72.0, 65.0, 74.0, 70.5, 68.5, 66.0, 75.0, 69.0],
+        'surface_m2': [1450, 2300, 5200, 2100, 1200, 2050, 4800, 2900, 2200, 1150, 2600, 1900],
+        'gop': [385000, 510000, 1320000, 430000, 310000, 390000, 1180000, 790000, 460000, 260000, 520000, 410000],
+        'capex_annuel': [45000, 60000, 120000, 50000, 35000, 40000, 95000, 75000, 55000, 30000, 40000, 45000],
+        'classement_etoiles': [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+        'revpar_n1': [62.4, 60.9, 86.3, 57.6, 55.5, 53.6, 78.5, 89.4, 62.6, 55.8, 54.5, 60.2],
+        'couts_op_ex_n1': [699000.0, 1028000.0, 2275000.0, 932000.0, 544000.0, 869000.0, 1874000.0, 1303000.0, 919000.0, 510000.0, 872000.0, 867000.0],
+        'taux_occupation_n1': [67.6, 65.2, 70.2, 66.9, 70.3, 64.0, 73.1, 69.4, 67.1, 65.4, 73.2, 67.1],
+        'nb_employes_n1': [9.0, 15.0, 29.0, 10.0, 6.0, 13.0, 27.0, 18.0, 12.0, 6.0, 8.0, 11.0],
+        'satisfaction_n1': [8.3, 7.9, 8.2, 8.1, 8.6, 7.4, 8.4, 8.6, 8.1, 7.9, 7.8, 7.8],
+        'nb_rooms': [48, 71, 118, 67, 42, 68, 109, 66, 62, 39, 73, 61],
+        'adr': [97.84, 96.27, 125.35, 89.71, 81.94, 85.38, 110.81, 133.33, 96.35, 87.88, 76.0, 90.58],
+        'rooms_revenue': [1191339, 1671541, 3833165, 1491823, 904421, 1377436, 3262346, 2264403, 1493574, 825641, 1518765, 1391567],
+        'total_revenue': [1832829, 2571602, 5897177, 2295112, 1391417, 2119132, 5018994, 3483697, 2297806, 1270217, 2336562, 2140872],
+        'fb_revenue': [641490, 900061, 2064012, 803289, 486996, 741696, 1756648, 1219294, 804232, 444576, 817797, 749305],
+        'rooms_cost': [297835, 417885, 958291, 372956, 226105, 344359, 815586, 566101, 373394, 206410, 379691, 347892],
+        'fb_cost': [461873, 648044, 1486089, 578368, 350637, 534021, 1264787, 877892, 579047, 320095, 588814, 539500],
+        'payroll_total': [360000, 560000, 1120000, 440000, 280000, 480000, 1040000, 720000, 440000, 240000, 320000, 400000],
+        'trevpar': [38183.94, 36219.75, 49976.08, 34255.4, 33128.98, 31163.71, 46045.82, 52783.29, 37061.39, 32569.67, 32007.7, 35096.26],
+        'undistributed_expenses': [311581, 437172, 1002520, 390169, 236541, 360252, 853229, 592228, 390627, 215937, 397216, 363948],
+        'fixed_charges': [164955, 231444, 530746, 206560, 125228, 190722, 451709, 313533, 206803, 114320, 210291, 192678],
+        'other_dept_revenue': [54985, 77148, 176915, 68853, 41743, 63574, 150570, 104511, 68934, 38107, 70097, 64226],
+        'other_dept_cost': [30242, 42431, 97303, 37869, 22959, 34966, 82814, 57481, 37914, 20959, 38553, 35324],
+        'ebitda': [566343, 794626, 1822228, 709190, 429947, 654812, 1550869, 1076462, 710021, 392496, 721997, 661530],
+        'book_value_assets': [4640000, 7360000, 16640000, 6720000, 3840000, 6560000, 15360000, 9280000, 7040000, 3680000, 8320000, 6080000],
+        'hours_worked': [14850, 23100, 46200, 18150, 11550, 19800, 42900, 29700, 18150, 9900, 13200, 16500],
+        'training_cost': [5400, 8400, 16800, 6600, 4200, 7200, 15600, 10800, 6600, 3600, 4800, 6000],
+        'marketing_cost': [73313, 102864, 235887, 91804, 55657, 84765, 200760, 139348, 91912, 50809, 93462, 85635],
+        'ota_gds_cost': [83394, 117008, 268322, 104428, 63309, 96421, 228364, 158508, 104550, 57795, 106314, 97410],
+        'sales_fte': [1.2, 1.8, 3.0, 1.7, 1.0, 1.7, 2.7, 1.6, 1.6, 1.0, 1.8, 1.5],
+        'promo_budget': [18328, 25716, 58972, 22951, 13914, 21191, 50190, 34837, 22978, 12702, 23366, 21409],
+        'energy_kwh': [905486, 1291186, 2274029, 1236629, 820800, 1199714, 2189343, 1262957, 1152757, 698657, 1486071, 1142443],
+        'water_m3': [2192, 3125, 5504, 2993, 1987, 2904, 5299, 3057, 2790, 1691, 3597, 2765],
+        'co2_tonnes': [72.4, 103.3, 181.9, 98.9, 65.7, 96.0, 175.1, 101.0, 92.2, 55.9, 118.9, 91.4],
+        'waste_tonnes': [8.52, 12.15, 21.41, 11.64, 7.73, 11.29, 20.61, 11.89, 10.85, 6.58, 13.99, 10.75],
+        'revenue_per_fte': [203648, 183686, 210613, 208647, 198774, 176594, 193038, 193539, 208891, 211703, 292070, 214087],
     }
     return pd.DataFrame(d).set_index('hotel_name')
 
@@ -2159,9 +2188,9 @@ if uploaded_file is not None:
     if st.session_state.get('_csv_hash') != _new_hash:
         st.session_state['module_results'] = {}
         st.session_state['_csv_hash'] = _new_hash
-elif use_sample_atream:
-    df = load_sample_atream()
-    st.sidebar.info("📋 Démo Atream / Ibis Styles France chargée — données Financier/Commercial/RH illustratives")
+elif use_sample_armen:
+    df = load_sample_armen_grenoble()
+    st.sidebar.info("🏨 Compset Grenoble (ARMEN AM) chargé — données Financier/Capital/Main-d'œuvre/RM/ESG illustratives")
 else:
     st.sidebar.warning("👆 Importez un CSV ou choisissez un jeu de données de référence")
     st.stop()
@@ -2325,7 +2354,7 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
         # 2005) — utilisé quand une vraie donnée est disponible, ignoré
         # sinon. Ce n'est pas la variable qui pose problème, c'est une
         # colonne source non fiable qui la remplace parfois (cf. audit
-        # portefeuille Ibis Atream) : la solution est de fournir un vrai
+        # portefeuille compset générique) : la solution est de fournir un vrai
         # nombre de chambres, pas de l'exclure définitivement du modèle.
         # Compact/minimal restent volontairement à variables réduites,
         # indépendamment de la disponibilité de nb_chambres — c'est leur
@@ -3093,7 +3122,7 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         "standard du secteur) pré-remplie en alternance simple (aucune base réelle, "
         "aucun lien avec la performance des hôtels — juste une répartition arbitraire "
         "pour que la variable soit testable) : ne pas présenter comme une vraie "
-        "donnée sans l'avoir remplacée par les vraies structures Atream."
+        "donnée sans l'avoir remplacée par les vraies structures du compset."
     )
 
     def _guess_localisation(hotel_name: str) -> str:
@@ -3111,7 +3140,7 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         'Classement (e)'  : [3]*dea.n,
         # Alternance simple par position dans la liste — pas de lien avec le score
         # BCC ou tout autre résultat du modèle (endogénéité). Purement arbitraire,
-        # affiché comme tel, à remplacer par les vraies données Atream.
+        # affiché comme tel, à remplacer par les vraies données du compset.
         # Colonne unique pour la structure de gestion — fusionne l'ancienne
         # "Gestion" (3rd party/Brand-managed/Owner-operated) dans "Affiliation",
         # le terme standard du secteur (Franchise / Contrat de gestion / Owner-
@@ -3119,7 +3148,7 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
         # deux taxonomies qui se recouvraient.
         # Alternance 3 catégories par position — pas de lien avec le score BCC.
         # Franchise = franchiseur et exploitant liés/mêmes (ex. Ibis + AccorInvest
-        # pour Atream) · Mgmt contract = exploitant opérateur professionnel,
+        # pour un compset générique) · Mgmt contract = exploitant opérateur professionnel,
         # indépendamment de la marque · Owner-operated = propriétaire seul, ni
         # franchise ni contrat de gestion.
         'Affiliation'     : [['Franchise', 'Mgmt contract', 'Owner-operated'][i % 3] for i in range(dea.n)],
@@ -4531,7 +4560,7 @@ with tab_capital:
             goppam   = round(gop_ke * 1000 / surf, 2)    if surf > 0    else None
             capex_ch = round(capex_ke * 1000 / lits, 0)  if lits else None
             # CA : exige un vrai nombre de chambres ou un total_revenue réel —
-            # plus de repli automatique, cf. audit portefeuille Ibis Atream
+            # plus de repli automatique, cf. audit portefeuille compset générique
             # (rapport chambres/lits de 1:1 à 7:1 selon l'hôtel).
             if dea.has_trevpar:
                 rev_est = float(dea.df.loc[hotel, 'total_revenue'])
