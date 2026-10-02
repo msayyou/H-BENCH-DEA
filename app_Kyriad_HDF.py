@@ -5144,7 +5144,7 @@ with tab_capital:
                 if _rv1 > 0 and _gp1 > 0:
                     ca_base_ft  = _rv1 * lits_ft * jours_exploit
                     gop_base_ft = _gp1 * 1000          # k€ → €
-            elif base_revpar_ft > 0 and base_gop_pct_ft > 0:
+            elif (base_revpar_ft or 0) > 0 and (base_gop_pct_ft or 0) > 0:
                 ca_base_ft  = base_revpar_ft * lits_ft * jours_exploit
                 gop_base_ft = ca_base_ft * base_gop_pct_ft / 100
 
