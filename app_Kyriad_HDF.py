@@ -5158,6 +5158,17 @@ with tab_capital:
             # cela créerait des données non fournies par l'utilisateur.
             base_revpar_ft, base_gop_pct_ft = None, None
 
+        # Normaliser la baseline globale avant toute comparaison numérique.
+        # Les valeurs absentes, NaN ou non convertibles désactivent ce fallback.
+        try:
+            base_revpar_ft = float(base_revpar_ft) if pd.notna(base_revpar_ft) else 0.0
+        except (TypeError, ValueError):
+            base_revpar_ft = 0.0
+        try:
+            base_gop_pct_ft = float(base_gop_pct_ft) if pd.notna(base_gop_pct_ft) else 0.0
+        except (TypeError, ValueError):
+            base_gop_pct_ft = 0.0
+
         flex_rows = []
         if not dea.has_chambres:
             st.info("Flow Through par hôtel non calculable — nombre de chambres réel non fourni.")
