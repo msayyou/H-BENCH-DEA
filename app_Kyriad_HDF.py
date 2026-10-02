@@ -3023,7 +3023,8 @@ with tab_board:
     st.markdown("---")
     _tc1, _tc2 = st.columns(2)
     with _tc1:
-        st.markdown('<p class="section-title">🏆 Top 3 — Leaders TOPSIS</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-title">🏆 Top 3 / Bottom 3 — TOPSIS seul (indicateur unique)</p>', unsafe_allow_html=True)
+        st.caption("Ce classement est basé uniquement sur le score TOPSIS. Il peut différer du Classement Composite (Score Pi) ci-dessous, qui intègre plusieurs critères pondérés (efficience DEA, RevPAR, satisfaction, etc.).")
         for _i, _h in enumerate(sorted(dea.hotels, key=lambda h: dea.topsis_ranks[h])[:3], 1):
             _bcc_h = dea.bcc_scores[_h]; _c = '#1e8449' if _est_efficient(_bcc_h) else '#f39c12'
             st.markdown(
@@ -3045,7 +3046,7 @@ with tab_board:
 
     # ── TOPSIS Composite Score Pi (Tab 10 → résumé Board) ────────────────────
     st.markdown("---")
-    st.markdown('<p class="section-title">🎯 Classement Composite — Score Pi (Multi-critères)</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">🎯 Classement Composite Officiel — Score Pi (référence multi-critères)</p>', unsafe_allow_html=True)
     st.caption(
         "TOPSIS composite : BCC · RevPAR · Satisfaction · TO"
         + (" · ETP/chambre · Coût/chambre" if dea.has_chambres else "")
