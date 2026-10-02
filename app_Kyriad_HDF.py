@@ -1166,7 +1166,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         cap_rows_pdf.sort(key=lambda r: (r['goppam'] is None, -(r['goppam'] or 0)))
 
         cpd = [["Hôtel", "BCC", "GOPPAM (€/m²)", "CAPEX/chambre (k€)", "Rend. CAPEX (x)", "Marge GOP"]]
-        for r in cap_rows_pdf[:14]:
+        for r in cap_rows_pdf:
             cpd.append([_clean(r['h'], 36), f"{r['bcc']:.1%}",
                         f"{r['goppam']:.0f}"  if r['goppam']  else "—",
                         f"{r['capexch']:.2f}" if r['capexch'] else "—",
@@ -1220,18 +1220,25 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         try:
             _bk = dea.df.copy()
             _tmp = dea.df.copy()
+            # Même garde de dtype que dans l'onglet Capital : les valeurs saisies
+            # sont des floats et ne doivent jamais remonter dans une colonne int64.
+            for _col in ('surface_m2', 'capex_annuel', 'gop'):
+                if _col not in _tmp.columns:
+                    _tmp[_col] = 0.0
+                else:
+                    _tmp[_col] = pd.to_numeric(_tmp[_col], errors='coerce').astype(float)
             for h in cap_input.index:
                 if h in _tmp.index:
-                    _tmp.loc[h, 'surface_m2']   = float(cap_input.loc[h, 'surface_m2'] or 0)
-                    _tmp.loc[h, 'capex_annuel'] = float(cap_input.loc[h, 'capex_annuel (k€)'] or 0) * 1000
-                    _tmp.loc[h, 'gop']          = float(cap_input.loc[h, 'gop (k€)'] or 0) * 1000
+                    _tmp.loc[h, 'surface_m2']   = float(pd.to_numeric(cap_input.loc[h, 'surface_m2'], errors='coerce') or 0)
+                    _tmp.loc[h, 'capex_annuel'] = float(pd.to_numeric(cap_input.loc[h, 'capex_annuel (k€)'], errors='coerce') or 0) * 1000.0
+                    _tmp.loc[h, 'gop']          = float(pd.to_numeric(cap_input.loc[h, 'gop (k€)'], errors='coerce') or 0) * 1000.0
             dea.df = _tmp
             cdea = dea.compute_capital_dea()
             dea.df = _bk
 
             if cdea is not None and not cdea.empty:
                 dd = [["Hôtel", "DEA Opér.", "DEA Capital", "Écart", "Lecture"]]
-                for _, r in cdea.head(14).iterrows():
+                for _, r in cdea.iterrows():
                     try:
                         _dv = float(str(r['Δ (Capital-Opérat.)']).replace('%','').replace('+',''))
                         if _dv <= -10:
@@ -4680,6 +4687,10 @@ with tab_capital:
         },
         key='capital_editor',
     )
+    # data_editor renvoie un DataFrame indépendant : copie explicite pour COW.
+    cap_input = cap_input.copy()
+    for _c in ('surface_m2', 'capex_annuel (k€)', 'gop (k€)'):
+        cap_input[_c] = pd.to_numeric(cap_input[_c], errors='coerce').fillna(0.0).astype(float)
     st.session_state['capital_input'] = cap_input
 
     # ── Export du tableau tel que saisi ─────────────────────────────────────
@@ -4886,15 +4897,25 @@ with tab_capital:
         else:
             # Construire un df temporaire pour compute_capital_dea
             _cap_df = dea.df.copy()
+            # pandas >= 3 / COW : préparer les dtypes avant toute affectation
+            # (sinon un float CAPEX dans une colonne int64 lève TypeError).
+            for _col in ('surface_m2', 'capex_annuel', 'gop'):
+                if _col not in _cap_df.columns:
+                    _cap_df[_col] = 0.0
+                else:
+                    _cap_df[_col] = pd.to_numeric(_cap_df[_col], errors='coerce').astype(float)
+            _cap_df = _cap_df.reindex(dea.hotels).copy()
             for _hotel in dea.hotels:
                 _row_cap = cap_input.loc[_hotel]
-                if _row_cap['surface_m2'] > 0:
-                    _cap_df.loc[_hotel, 'surface_m2'] = _row_cap['surface_m2']
-                if _row_cap['capex_annuel (k€)'] > 0:
-                    _cap_df['capex_annuel'] = _cap_df['capex_annuel'].astype(float)
-                    _cap_df.loc[_hotel, 'capex_annuel'] = float(_row_cap['capex_annuel (k€)']) * 1000
-                if _row_cap['gop (k€)'] > 0:
-                    _cap_df.loc[_hotel, 'gop'] = _row_cap['gop (k€)'] * 1000
+                _surf = pd.to_numeric(_row_cap['surface_m2'], errors='coerce')
+                _capex = pd.to_numeric(_row_cap['capex_annuel (k€)'], errors='coerce')
+                _gop = pd.to_numeric(_row_cap['gop (k€)'], errors='coerce')
+                if pd.notna(_surf) and _surf > 0:
+                    _cap_df.loc[_hotel, 'surface_m2'] = float(_surf)
+                if pd.notna(_capex) and _capex > 0:
+                    _cap_df.loc[_hotel, 'capex_annuel'] = float(_capex) * 1000.0
+                if pd.notna(_gop) and _gop > 0:
+                    _cap_df.loc[_hotel, 'gop'] = float(_gop) * 1000.0
     
             # Mettre à jour dea.df temporairement pour compute_capital_dea
             _dea_df_orig = dea.df.copy()
