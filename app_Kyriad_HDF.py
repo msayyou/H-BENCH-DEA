@@ -345,6 +345,37 @@ def generate_fiche_actif_pdf(
     return buf.getvalue()
 
 
+def detect_data_period(dataframe) -> str:
+    """Détecte une période à partir des colonnes année/date du fichier chargé.
+    Retourne une chaîne vide si aucune période fiable n'est disponible."""
+    import re as _re
+    if dataframe is None:
+        return ""
+    candidates = []
+    for col in getattr(dataframe, "columns", []):
+        name = str(col).strip().lower()
+        # Ne considérer que les colonnes explicitement temporelles.
+        if not (_re.search(r"(^|[_ .-])(annee|année|year|date|period|période|periode)([_ .-]|$)", name)
+                or name in {"annee", "année", "year", "date"}):
+            continue
+        ser = dataframe[col]
+        if pd.api.types.is_numeric_dtype(ser):
+            vals = pd.to_numeric(ser, errors="coerce").dropna()
+            vals = vals[(vals >= 1900) & (vals <= 2100)]
+            if len(vals):
+                years = sorted({int(v) for v in vals})
+                candidates.append(str(years[0]) if len(years) == 1 else f"{years[0]}–{years[-1]}")
+                continue
+        dt = pd.to_datetime(ser, errors="coerce", dayfirst=True).dropna()
+        if len(dt):
+            start, end = dt.min(), dt.max()
+            if start.year == end.year:
+                candidates.append(str(start.year))
+            else:
+                candidates.append(f"{start.strftime('%d/%m/%Y')}–{end.strftime('%d/%m/%Y')}")
+    return candidates[0] if candidates else ""
+
+
 def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
                                   cap_input=None, sw_results=None,
                                   jours_exploit: int = 365,
@@ -365,6 +396,10 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
     """
     if not REPORTLAB_AVAILABLE:
         return b""
+
+    # Libellés de couverture entièrement alimentés par la saisie et les données.
+    _portfolio_label = str(portfolio_name or "").strip() or "Portefeuille analysé"
+    _period_label = detect_data_period(getattr(dea, "df", None))
 
     # Seuils d'interprétation — conventions sectorielles par défaut,
     # recalibrables depuis la barre latérale de l'application
@@ -486,7 +521,10 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
     story.append(Paragraph("RAPPORT PORTFOLIO", cover_title))
     story.append(Paragraph("Analyse d'efficience DEA multi-dimensionnelle", cover_sub))
     story.append(HRFlowable(width="55%", thickness=2, color=NAVY, spaceAfter=18))
-    story.append(Paragraph(f"{dea.n} hôtels analysés", cover_sub))
+    _cover_period = f" — {_period_label}" if _period_label else ""
+    story.append(Paragraph(
+        f"{dea.n} hôtels analysés — {_clean(_portfolio_label, 120)}{_cover_period}",
+        cover_sub))
     story.append(Paragraph(f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}", cover_sub))
     if illustrative_data:
         story.append(Spacer(1, 0.6*cm))
@@ -1901,10 +1939,6 @@ with st.sidebar:
     st.subheader("📐 Seuils Quadrants")
     bcc_threshold   = st.slider("Seuil BCC efficience",   0.70, 0.99, 0.90, 0.01)
     scale_threshold = st.slider("Seuil Scale Efficiency", 0.70, 0.99, 0.90, 0.01)
-    st.caption(
-        "ℹ️ Les seuils réglables des quadrants Q1–Q4 sont indépendants des seuils fixes à 95 % "
-        "utilisés ailleurs dans le dashboard (coloration des barres BCC et règles de Cross-Efficience)."
-    )
 
     # ── Seuils de lecture du rapport ─────────────────────────────────────────
     # Les valeurs par défaut sont des conventions sectorielles hôtellerie.
@@ -5770,6 +5804,22 @@ sont automatiquement mappées vers les noms standard des modules.*
     #  les modules amont parcourus (Capital, Stage 2, Metafrontière...).
     # ══════════════════════════════════════════════════════════════════════
 
+    # ── Identité du portefeuille / période ──────────────────────────────────
+    st.markdown("---")
+    st.subheader("🏷️ Identité du portefeuille")
+    portfolio_name_ui = st.text_input(
+        "Nom du parc / de la marque",
+        value=st.session_state.get("portfolio_name", ""),
+        key="portfolio_name",
+        placeholder="Portefeuille analysé",
+        help="Ce nom est repris sur la page de garde du PDF. Laissez vide pour utiliser « Portefeuille analysé »."
+    ).strip() or "Portefeuille analysé"
+    _detected_period_ui = detect_data_period(getattr(dea, "df", None))
+    if _detected_period_ui:
+        st.caption(f"Période détectée dans les données : {_detected_period_ui}")
+    else:
+        st.caption("Aucune période détectée dans les colonnes du fichier.")
+
     # ── Export Portfolio PDF ─────────────────────────────────────────────────
     st.markdown("---")
     st.markdown('<p class="section-title">📥 Rapport Portfolio PDF</p>', unsafe_allow_html=True)
@@ -5924,6 +5974,7 @@ sont automatiquement mappées vers les noms standard des modules.*
                         sw_results=st.session_state.get('sw_results'),
                         jours_exploit=jours_exploit, ft_pct=ft_pct,
                         avg_salary=avg_salary,
+                        portfolio_name=portfolio_name_ui,
                         thresholds=REPORT_THRESHOLDS,
                         module_results=st.session_state.get('module_results', {}),
                     )
