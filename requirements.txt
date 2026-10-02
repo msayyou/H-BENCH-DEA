@@ -10,3 +10,4 @@ kaleido>=0.2.1
 requests
 pulp>=3.0,<4
 statsmodels
+matplotlib
