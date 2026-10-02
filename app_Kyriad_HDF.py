@@ -6,6 +6,12 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+
+# Matplotlib est utilisé uniquement pour les figures intégrées au PDF.
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 from datetime import datetime
 import warnings
 import requests
@@ -376,6 +382,121 @@ def detect_data_period(dataframe) -> str:
     return candidates[0] if candidates else ""
 
 
+# ── Figures PDF : Synthèse exécutive / catégorisation / CAPEX ───────────────
+def _pdf_mpl_image(fig, Image, width_cm=17.4, height_cm=None):
+    """Convertit une figure Matplotlib en image ReportLab sans fichier temporaire."""
+    bio = BytesIO()
+    fig.savefig(bio, format="png", dpi=160, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    bio.seek(0)
+    img = Image(bio)
+    img.drawWidth = width_cm * cm
+    if height_cm is not None:
+        img.drawHeight = height_cm * cm
+    else:
+        ratio = fig.get_figheight() / max(fig.get_figwidth(), 1e-9)
+        img.drawHeight = img.drawWidth * ratio
+    return img
+
+
+def generate_executive_value_chart(dea, colors=None):
+    """Génère la barre « situation actuelle / gisement capturable ».
+
+    Le gisement est prioritairement la somme des slacks GOP disponibles ; à défaut,
+    il est estimé à partir de l'écart BCC et du GOP observé. Si aucune donnée GOP
+    n'est disponible, la figure reste informative et indique l'indisponibilité.
+    """
+    pal = {"navy": "#1a3a5c", "blue": "#2e6da4", "green": "#1e8449"}
+    pal.update(colors or {})
+    current = 0.0; upside = 0.0
+    try:
+        df = dea.df
+        gop_col = next((c for c in ("gop", "gop (k€)", "GOP", "gop_k€") if c in df.columns), None)
+        if gop_col:
+            vals = pd.to_numeric(df[gop_col], errors="coerce").fillna(0)
+            current = float(vals.sum())
+            # Les colonnes source en euros sont converties en k€ pour le graphique.
+            if gop_col == "gop": current /= 1000.0
+        for h in dea.hotels:
+            slack = dea.slacks.get(h, {}).get("outputs", {}).get("gop", 0) or 0
+            if not slack:
+                slack = dea.slacks.get(h, {}).get("outputs", {}).get("gop (k€)", 0) or 0
+            if slack: upside += float(slack) / (1000.0 if gop_col == "gop" else 1.0)
+        if upside <= 0 and current > 0:
+            upside = sum(current / max(float(dea.bcc_scores.get(h, 1)), 1e-6)
+                         for h in dea.hotels) - current
+            upside = max(0.0, upside)
+    except Exception:
+        current, upside = 0.0, 0.0
+    fig, ax = plt.subplots(figsize=(7.2, 2.25))
+    if current > 0:
+        ax.barh(["GOP actuel"], [current], color=pal["navy"], label="Situation actuelle")
+        ax.barh(["GOP actuel"], [upside], left=[current], color=pal["green"],
+                label="Gisement capturable")
+        ax.text(current / 2, 0, f"{current:,.0f} k€", ha="center", va="center", color="white", fontsize=9)
+        ax.text(current + upside / 2, 0, f"+{upside:,.0f} k€", ha="center", va="center", color="white", fontsize=9)
+        ax.set_xlim(0, max(current + upside, 1) * 1.08)
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:,.0f} k€"))
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.22), ncol=2, frameon=False, fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "GOP / gisement non disponible dans les données chargées",
+                ha="center", va="center", color=pal["navy"], fontsize=9, transform=ax.transAxes)
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.set_title("Gisement de valeur — GOP additionnel capturable", color=pal["navy"], fontsize=10, fontweight="bold", pad=18)
+    ax.spines[["top", "right", "left"]].set_visible(False); ax.tick_params(axis="y", length=0)
+    ax.grid(axis="x", alpha=.18); fig.tight_layout()
+    return fig
+
+
+def generate_actionable_category_chart(dea, colors=None):
+    """Génère la répartition dynamique des hôtels par catégorie actionnable."""
+    labels = [("Star", "Q1"), ("Sous-performant à potentiel", "Q3"),
+              ("Sous-échelle", "Q2"), ("À arbitrer", "Q4")]
+    palette = ["#1e8449", "#2e6da4", "#b9770e", "#c0392b"]
+    counts = [sum(1 for h in dea.hotels if dea.quadrants.get(h) == q) for _, q in labels]
+    fig, ax = plt.subplots(figsize=(7.2, 2.65))
+    bars = ax.bar([x[0] for x in labels], counts, color=palette, width=.68)
+    ax.bar_label(bars, labels=[str(v) for v in counts], padding=3, fontsize=9, fontweight="bold")
+    ax.set_ylim(0, max(counts + [1]) * 1.22); ax.set_ylabel("Nombre d'hôtels", fontsize=8)
+    ax.set_title("Catégorisation actionnable du portefeuille", color="#1a3a5c", fontsize=10, fontweight="bold", pad=10)
+    ax.tick_params(axis="x", labelsize=7); ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", alpha=.18); fig.tight_layout()
+    return fig
+
+
+def generate_capex_roi_chart(dea, cap_input=None, colors=None):
+    """Classe les 10 meilleurs hôtels par ROI marginal attendu / euro de CAPEX."""
+    rows = []
+    try:
+        for h in dea.hotels:
+            if cap_input is None or h not in cap_input.index: continue
+            cap = float(cap_input.loc[h, "capex_annuel (k€)"] or 0)
+            gop = float(cap_input.loc[h, "gop (k€)"] or 0)
+            bcc = max(float(dea.bcc_scores.get(h, 1)), 1e-6)
+            extra = 0.0
+            for key in ("gop", "gop (k€)"):
+                extra = float(dea.slacks.get(h, {}).get("outputs", {}).get(key, 0) or 0)
+                if extra: break
+            extra = extra / 1000.0 if key == "gop" else extra
+            if extra <= 0: extra = max(0.0, gop * (1.0 / bcc - 1.0))
+            if cap > 0 and extra > 0: rows.append((h, 1000.0 * extra / cap))
+    except Exception:
+        rows = []
+    rows = sorted(rows, key=lambda x: x[1], reverse=True)[:10]
+    fig, ax = plt.subplots(figsize=(7.2, max(2.4, .32 * max(len(rows), 1) + .8)))
+    if rows:
+        names = [str(h)[:24] for h, _ in rows][::-1]; vals = [v for _, v in rows][::-1]
+        bars = ax.barh(names, vals, color=["#1e8449" if i >= len(vals)-3 else "#2e6da4" for i in range(len(vals))])
+        ax.bar_label(bars, labels=[f"{v:.1f}%" for v in vals], padding=3, fontsize=7)
+        ax.set_xlim(0, max(vals) * 1.18); ax.set_xlabel("ROI marginal attendu (% / an)", fontsize=8)
+    else:
+        ax.text(.5, .5, "CAPEX et GOP nécessaires pour classer les candidats", ha="center", va="center", transform=ax.transAxes, fontsize=9)
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.set_title("CAPEX → retour attendu — top 10 des candidats", color="#1a3a5c", fontsize=10, fontweight="bold", pad=10)
+    ax.tick_params(axis="y", labelsize=7); ax.spines[["top", "right"]].set_visible(False); ax.grid(axis="x", alpha=.18)
+    fig.tight_layout(); return fig
+
+
 def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
                                   cap_input=None, sw_results=None,
                                   jours_exploit: int = 365,
@@ -544,50 +665,6 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
         S("ft2", fontSize=8, textColor=colors.grey, alignment=TA_CENTER)))
     story.append(PageBreak())
 
-    # ══════════════════ SYNTHÈSE EXÉCUTIVE ══════════════════
-    # Les messages sont calculés exclusivement à partir des scores, quadrants,
-    # slacks et variables du portefeuille chargé — aucun nom n'est codé en dur.
-    story.append(Paragraph("Synthèse exécutive", h1_s))
-    _ineff = [h for h in dea.hotels if dea.bcc_scores.get(h, 1.0) < 0.999]
-    _crit_exec = [h for h in dea.hotels if dea.bcc_scores.get(h, 1.0) < _TH['crit']]
-    _front_exec = [h for h in dea.hotels if dea.bcc_scores.get(h, 1.0) >= 0.999]
-    _gop_margin_exec = 0.0
-    if 'gop' in getattr(dea, 'df', pd.DataFrame()).columns and 'revpar' in dea.df.columns:
-        _margins = []
-        for _h in dea.hotels:
-            _g = _v(_h, 'gop', 0.0); _r = _v(_h, 'revpar', 0.0)
-            _rooms = _v(_h, 'nb_chambres', 0.0)
-            if _g > 0 and _r > 0 and _rooms > 0:
-                _margins.append(_g * 1000.0 / (_r * _rooms * jours_exploit))
-        if _margins: _gop_margin_exec = max(0.0, min(1.0, sum(_margins) / len(_margins)))
-    if not _gop_margin_exec: _gop_margin_exec = max(0.0, min(1.0, float(ft_pct or 0.50)))
-    _value_rows = []
-    for _h in _ineff:
-        _slack_r = dea.slacks.get(_h, {}).get('outputs', {}).get('revpar', 0) or 0
-        _rooms = _v(_h, 'nb_chambres', 0.0)
-        _uplift = max(0.0, float(_slack_r)) * _rooms * jours_exploit * _gop_margin_exec
-        if _uplift > 0: _value_rows.append(_uplift)
-    _value_exec = sum(_value_rows)
-    story.append(Paragraph(
-        f"<b>{len(_ineff)} hôtels</b> sont sous-performants au regard de la frontière BCC ; "
-        f"<b>{len(_crit_exec)}</b> se situent en zone critique (score &lt; {_TH['crit']:.0%}).", body_s))
-    story.append(Paragraph(
-        f"Le portefeuille compte <b>{len(_front_exec)} hôtels efficients</b>, utilisables comme "
-        "références internes pour les plans d'amélioration.", body_s))
-    story.append(Paragraph(
-        f"Le gisement de valeur théorique est estimé à <b>{_value_exec/1000:,.0f} k€ de GOP/an</b> "
-        "si les écarts de RevPAR identifiés par les slacks étaient capturés ; il s'agit d'un "
-        "ordre de grandeur conditionnel, non d'une prévision.", body_s))
-    story.append(Paragraph(
-        "Recommandation : allouer d'abord les ressources aux hôtels à fort slack de sortie et "
-        "à retour CAPEX marginal élevé, tout en protégeant les actifs efficients.", body_s))
-    _exec_kpi = [["Indicateur", "Valeur"],
-                 ["Gisement de valeur (GOP additionnel théorique)", f"{_value_exec/1000:,.0f} k€/an"],
-                 ["Hôtels sous-performants", str(len(_ineff))],
-                 ["Hôtels en zone critique", str(len(_crit_exec))]]
-    story.append(_tbl(_exec_kpi, [11.0*cm, 6.4*cm], align_right=[1]))
-    story.append(_lecture("Le gisement est calculé à partir du slack RevPAR DEA, du nombre de chambres et d'un taux de conversion GOP observé ou, à défaut, du paramètre Flow Through. Il ne constitue pas une promesse de résultat."))
-
     # ══════════════════ NOTE DE LECTURE ══════════════════
     story.append(Paragraph("Note de lecture", h1_s))
     story.append(Paragraph(
@@ -672,6 +749,11 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
                "Gestion et dimensionnement contribuent à parts comparables aux écarts "
                "observés.")))
 
+    # ══════════════════ SYNTHÈSE EXÉCUTIVE ══════════════════
+    story.append(Paragraph("Synthèse exécutive — gisement de valeur", h1_s))
+    story.append(Paragraph("Le graphique ci-dessous rapproche la base GOP observée du potentiel additionnel capturable, calculé exclusivement à partir des données et slacks disponibles.", body_s))
+    story.append(_pdf_mpl_image(generate_executive_value_chart(dea, {"navy": "#1a3a5c", "green": "#1e8449"}), Image))
+
     # ══════════════════ QUADRANTS ══════════════════
     story.append(Paragraph("2. Quadrants — gestion pure x efficacité d'échelle", h1_s))
     story.append(Paragraph(
@@ -714,47 +796,9 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
     else:
         story.append(Paragraph("Synthèse par quadrant indisponible.", body_s))
 
-    story.append(PageBreak())
-
-    # ══════════════════ CATÉGORISATION ACTIONNABLE ══════════════════
-    story.append(Paragraph("3. Catégorisation actionnable des hôtels", h1_s))
-    story.append(Paragraph("Reformulation business des quadrants DEA : chaque catégorie associe un diagnostic et une décision prioritaire.", meth_s))
-    _cat_meta = {
-        'Q1': ("Star", "Efficient, à protéger et benchmarker en interne"),
-        'Q3': ("Sous-performant à potentiel", "Inefficient mais structure saine — plan d'action prioritaire"),
-        'Q2': ("Sous-échelle", "Taille sous-optimale — candidat extension/rénovation"),
-        'Q4': ("À arbitrer", "Inefficient sans levier clair — candidat cession"),
-    }
-    _cat_data = [["Catégorie", "Nb hôtels", "Hôtels", "Décision"]]
-    for _q, (_cat, _decision) in _cat_meta.items():
-        _names = [_clean(h, 45) for h in dea.hotels if dea.quadrants.get(h) == _q]
-        _cat_data.append([_cat, str(len(_names)), ", ".join(_names) or "—", _decision])
-    story.append(_tbl(_cat_data, [3.6*cm, 1.5*cm, 7.0*cm, 5.3*cm], align_right=[1]))
-    story.append(_lecture("Les catégories reprennent les quadrants DEA existants ; elles orientent l'allocation du management et du capital sans modifier les seuils du modèle."))
-
-    # ══════════════════ CAPEX → RETOUR ATTENDU ══════════════════
-    story.append(Paragraph("4. CAPEX → retour marginal attendu", h1_s))
-    story.append(Paragraph("Classement des hôtels par retour marginal attendu par euro de CAPEX, à partir des slacks DEA disponibles et de l'alias CAPEX normalisé.", meth_s))
-    _capex_col = next((c for c in ('capex_annuel', 'capex_annuel (k€)', 'capex', 'capex_per_room') if c in getattr(dea, 'df', pd.DataFrame()).columns), None)
-    _roi_rows = []
-    for _h in dea.hotels:
-        _capex_raw = _v(_h, _capex_col, 0.0) if _capex_col else 0.0
-        _capex_eur = _capex_raw * (1000.0 if _capex_col == 'capex_annuel (k€)' else 1.0)
-        _slack_r = float(dea.slacks.get(_h, {}).get('outputs', {}).get('revpar', 0) or 0)
-        _rooms = _v(_h, 'nb_chambres', 0.0)
-        _gop_uplift = max(0.0, _slack_r) * _rooms * jours_exploit * _gop_margin_exec
-        _roi = _gop_uplift / _capex_eur if _capex_eur > 0 else None
-        if _roi is not None: _roi_rows.append((_roi, _h, _gop_uplift, _capex_eur, _slack_r))
-    _roi_rows.sort(reverse=True, key=lambda x: x[0])
-    _roi_data = [["Rang", "Hôtel", "GOP additionnel théorique", "CAPEX", "Retour marginal", "Slack RevPAR"]]
-    for _i, (_roi, _h, _gu, _ce, _sr) in enumerate(_roi_rows, 1):
-        _roi_data.append([str(_i), _clean(_h, 35), f"{_gu/1000:,.1f} k€/an", f"{_ce/1000:,.1f} k€", f"{_roi:.2f} €/€", f"{_sr:.2f} €"])
-    if len(_roi_data) > 1:
-        story.append(_tbl(_roi_data, [1.0*cm, 5.0*cm, 3.7*cm, 2.3*cm, 2.5*cm, 2.9*cm], align_right=[0,2,3,4,5]))
-        _focus = ", ".join(_clean(x[1], 30) for x in _roi_rows[:min(5, len(_roi_rows))])
-        story.append(Paragraph(f"<b>Top effort ciblé :</b> {_focus}. Ces {min(5, len(_roi_rows))} hôtels présentent le meilleur retour marginal estimé, sous réserve que le CAPEX permette effectivement de résorber le slack.", body_s))
-    else:
-        story.append(Paragraph("Classement CAPEX indisponible : renseigner une colonne CAPEX annuelle non nulle et les variables nécessaires au calcul du slack de sortie.", body_s))
+    story.append(Paragraph("Catégorisation actionnable des hôtels", h1_s))
+    story.append(Paragraph("Répartition des actifs selon les quatre catégories opérationnelles issues des quadrants existants ; les seuils de quadrants ne sont pas modifiés.", body_s))
+    story.append(_pdf_mpl_image(generate_actionable_category_chart(dea), Image))
 
     story.append(PageBreak())
 
@@ -1306,6 +1350,10 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
         else:
             story.append(Paragraph(
                 "Module non activé – données CAPEX / GOP requises.", body_s))
+
+        story.append(Paragraph("Lien CAPEX → retour attendu", h2_s))
+        story.append(Paragraph("Classement des meilleurs candidats selon le ROI marginal attendu par euro de CAPEX ; les trois premiers sont mis en évidence.", body_s))
+        story.append(_pdf_mpl_image(generate_capex_roi_chart(dea, cap_input), Image))
 
         _gv = [r['goppam'] for r in cap_rows_pdf if r['goppam']]
         _mv = [r['marge']  for r in cap_rows_pdf if r['marge']]
@@ -5243,13 +5291,6 @@ with tab_capital:
             # Ne pas proposer de baseline ou de benchmark de remplacement :
             # cela créerait des données non fournies par l'utilisateur.
             base_revpar_ft, base_gop_pct_ft = None, None
-
-        # Normalisation défensive : la baseline optionnelle peut être None/NaN.
-        # Les comparaisons numériques ci-dessous doivent rester sûres en l’absence de N-1.
-        base_revpar_ft = pd.to_numeric(base_revpar_ft, errors="coerce")
-        base_gop_pct_ft = pd.to_numeric(base_gop_pct_ft, errors="coerce")
-        base_revpar_ft = 0.0 if pd.isna(base_revpar_ft) else float(base_revpar_ft)
-        base_gop_pct_ft = 0.0 if pd.isna(base_gop_pct_ft) else float(base_gop_pct_ft)
 
         flex_rows = []
         if not dea.has_chambres:
