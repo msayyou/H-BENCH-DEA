@@ -4891,6 +4891,7 @@ with tab_capital:
                 if _row_cap['surface_m2'] > 0:
                     _cap_df.loc[_hotel, 'surface_m2'] = _row_cap['surface_m2']
                 if _row_cap['capex_annuel (k€)'] > 0:
+                    _cap_df['capex_annuel'] = _cap_df['capex_annuel'].astype(float)
                     _cap_df.loc[_hotel, 'capex_annuel'] = float(_row_cap['capex_annuel (k€)']) * 1000
                 if _row_cap['gop (k€)'] > 0:
                     _cap_df.loc[_hotel, 'gop'] = _row_cap['gop (k€)'] * 1000
