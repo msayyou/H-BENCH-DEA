@@ -529,28 +529,61 @@ def get_required_outputs(module_id: str) -> list[str]:
     ]
 
 
-def normalize_column_aliases(columns) -> list[str]:
-    """Normalise les anciens noms de colonnes vers les clés canoniques.
+# Nom canonique de la colonne CAPEX dans le projet. Les variantes historiques
+# restent reconnues à l'entrée afin de ne pas casser les datasets existants.
+CAPEX_COLUMN_ALIASES = (
+    "capex_annuel",
+    "capex",
+    "CAPEX",
+    "CAPEX_ANNUEL",
+    "capex annuel",
+    "capex_annuel (k€)",
+)
 
-    ``capex_annuel`` est le nom officiel. L'ancien ``capex`` reste accepté
-    en entrée afin que les datasets/configurations historiques restent
-    utilisables, sans jamais remplacer la colonne canonique si elle existe.
+
+def resolve_capex_column(columns) -> str | None:
+    """Retourne le nom réellement présent de la colonne CAPEX, ou ``None``.
+
+    La recherche est insensible à la casse et suit l'ordre de priorité des
+    alias ci-dessus : ``capex_annuel`` est donc préféré à ``capex`` si les
+    deux colonnes coexistent. Le nom retourné est le libellé original de la
+    colonne, ce qui permet de l'utiliser directement avec ``df[column]``.
+    """
+    available = list(columns)
+    by_folded_name = {str(col).strip().casefold(): col for col in available}
+    for alias in CAPEX_COLUMN_ALIASES:
+        found = by_folded_name.get(alias.casefold())
+        if found is not None:
+            return found
+    return None
+
+
+def normalize_column_aliases(columns) -> list[str]:
+    """Normalise les alias CAPEX vers la clé canonique ``capex_annuel``.
+
+    La colonne canonique est conservée si elle existe ; sinon la première
+    variante reconnue (p. ex. ``capex``, ``CAPEX``) est renommée logiquement.
     Accepte une liste de noms ou tout itérable de noms (p. ex. ``df.columns``).
     """
     cols = list(columns)
-    if "capex_annuel" not in cols and "capex" in cols:
-        cols = ["capex_annuel" if col == "capex" else col for col in cols]
+    if "capex_annuel" not in cols:
+        capex_col = resolve_capex_column(cols)
+        if capex_col is not None:
+            cols = ["capex_annuel" if col == capex_col else col for col in cols]
     return cols
 
 
 def normalize_dataframe_columns(df):
-    """Retourne une copie avec l'ancien alias ``capex`` mappé vers ``capex_annuel``.
+    """Retourne une copie avec l'alias CAPEX présent mappé vers ``capex_annuel``.
 
     Le renommage n'est effectué que si la colonne canonique est absente,
     ce qui évite toute collision et tout accès à une colonne inexistante.
     """
-    if "capex" in df.columns and "capex_annuel" not in df.columns:
-        return df.rename(columns={"capex": "capex_annuel"})
+    if "capex_annuel" in df.columns:
+        return df
+    capex_col = resolve_capex_column(df.columns)
+    if capex_col is not None:
+        return df.rename(columns={capex_col: "capex_annuel"})
     return df
 
 
