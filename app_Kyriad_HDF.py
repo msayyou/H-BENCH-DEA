@@ -37,6 +37,7 @@ def _est_efficient(value):
     return _score_fraction(value) >= SEUIL_EFFICIENCE - TOLERANCE_EFFICIENCE
 from datetime import datetime
 import warnings
+import re
 import requests
 
 from dea_model import HotelDEAAnalyzer, QUADRANT_LABELS
@@ -2225,19 +2226,42 @@ NUMERIC_COLS = ['nb_employes', 'couts_op_ex', 'revpar', 'satisfaction', 'taux_oc
 OPTIONAL_NUMERIC_COLS = ['nb_chambres']  # jamais requis — non fiable sans vraie donnée
 
 
-def _to_num(s: pd.Series) -> pd.Series:
-    """Conversion numérique tolérante aux formats FR / Excel.
-    '475 000', '475\u00a0000' (espace insécable), '84,5 %', '1 250,50 €' → float.
-    Si point ET virgule coexistent, la virgule est traitée comme séparateur de milliers."""
-    if pd.api.types.is_numeric_dtype(s):
-        return pd.to_numeric(s, errors='coerce')
-    t = (s.astype(str)
-           .str.replace('[\\s\u00a0\u202f]', '', regex=True)
-           .str.replace(r'[%€$£★☆]', '', regex=True))
-    _both = t.str.contains('.', regex=False) & t.str.contains(',', regex=False)
-    t = t.where(~_both, t.str.replace(',', '', regex=False))
-    t = t.str.replace(',', '.', regex=False)
-    return pd.to_numeric(t.replace({'': np.nan, 'nan': np.nan, 'None': np.nan}), errors='coerce')
+def _to_num(s):
+    """Convertit des nombres FR/Excel (série ou scalaire) en valeurs numériques.
+    Accepte notamment « 1 234,5 », « 1.234,5 », « 45 % » et les espaces insécables.
+    """
+    if isinstance(s, pd.Series):
+        return s.map(_to_scalar)
+    return _to_scalar(s)
+
+
+def _to_scalar(value):
+    """Conversion explicite d'une valeur potentiellement Series en scalaire."""
+    if isinstance(value, pd.Series):
+        value = value.dropna()
+        if len(value) != 1:
+            return np.nan
+        value = value.iloc[0]
+    if value is None or (not isinstance(value, (list, tuple, dict)) and pd.isna(value)):
+        return np.nan
+    if isinstance(value, (int, float, np.number)):
+        return float(value)
+    text = str(value).strip().replace('\u00a0', '').replace('\u202f', '').replace(' ', '')
+    text = re.sub(r'[%€$£★☆]', '', text)
+    if not text:
+        return np.nan
+    if ',' in text and '.' in text:
+        # Le dernier séparateur est le séparateur décimal.
+        if text.rfind(',') > text.rfind('.'):
+            text = text.replace('.', '').replace(',', '.')
+        else:
+            text = text.replace(',', '')
+    elif ',' in text:
+        text = text.replace(',', '.')
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return np.nan
 
 
 _UNIT_TO_EUR = {'k€': 1e3, 'keur': 1e3, 'k eur': 1e3, 'm€': 1e6, 'meur': 1e6}
@@ -2882,17 +2906,28 @@ with tab_board:
         )
     else:
         _up_fte = _up_rev = _up_gop = _ca_tot = 0.0
+        _missing_upside = []
         for _h in dea.hotels:
-            _lits  = float(dea.df.loc[_h, 'nb_chambres'])
-            _rvp   = float(dea.df.loc[_h, 'revpar'])
-            _se    = dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', 0)
-            _sr    = dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', 0)
-            _up_fte += _se * avg_salary / 1000
+            _lits  = _to_scalar(dea.df.loc[_h, 'nb_chambres'])
+            _rvp   = _to_scalar(dea.df.loc[_h, 'revpar'])
+            _se    = _to_scalar(dea.slacks.get(_h,{}).get('inputs',{}).get('nb_employes', np.nan))
+            _sr    = _to_scalar(dea.slacks.get(_h,{}).get('outputs',{}).get('revpar', np.nan))
+            if any(pd.isna(v) for v in (_lits, _rvp, _se, _sr)):
+                _missing_upside.append(_h)
+                continue
+            _up_fte += _se * _to_scalar(avg_salary) / 1000
             # CA = RevPAR × lits × jours. Ne PAS multiplier par le taux
             # d'occupation : RevPAR = ADR × OCC l'intègre déjà (USALI / Kimes 1989).
             _ca_tot += _rvp * _lits * jours_exploit * revpar_value / 1_000_000
             _up_rev += _sr  * _lits * jours_exploit * revpar_value / 1_000_000
             _up_gop += _sr  * _lits * jours_exploit * revpar_value * ft_pct / 1_000_000
+
+        if _missing_upside:
+            st.warning(
+                "⚠️ Upsides partiellement non calculables : données manquantes ou non numériques "
+                f"pour {len(_missing_upside)} hôtel(s) (ex. {_missing_upside[0]}). "
+                "Les lignes concernées sont exclues du total plutôt que remplacées silencieusement par 0."
+            )
 
         _pct_rev = (_up_rev / _ca_tot * 100) if _ca_tot > 0 else 0
 
@@ -5319,8 +5354,8 @@ with tab_capital:
             _manque = []
             if not _has_rev_n1: _manque.append('`revpar_n1`')
             if not _has_gop_n1: _manque.append('`gop_n1`')
-            st.info(
-                "Module non activé – données N-1 / GOP requises. "
+            st.warning(
+                "Module non activé – données N-1 / GOP requises : aucun repli à 0 n'est appliqué. "
                 f"Colonnes manquantes : {', '.join(_manque)}."
             )
             # Ne pas proposer de baseline ou de benchmark de remplacement :
@@ -5328,10 +5363,8 @@ with tab_capital:
             base_revpar_ft, base_gop_pct_ft = None, None
 
         # Normalisation défensive des valeurs scalaires de baseline avant comparaison/calcul.
-        base_revpar_ft = pd.to_numeric(base_revpar_ft, errors='coerce')
-        base_revpar_ft = 0.0 if pd.isna(base_revpar_ft) else float(base_revpar_ft)
-        base_gop_pct_ft = pd.to_numeric(base_gop_pct_ft, errors='coerce')
-        base_gop_pct_ft = 0.0 if pd.isna(base_gop_pct_ft) else float(base_gop_pct_ft)
+        base_revpar_ft = _to_scalar(base_revpar_ft)
+        base_gop_pct_ft = _to_scalar(base_gop_pct_ft)
 
         flex_rows = []
         if not dea.has_chambres:
