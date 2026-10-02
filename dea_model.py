@@ -64,7 +64,7 @@ INPUT_MODES = {
 }
 
 QUADRANT_LABELS = {
-    'Q1': '🏆 Efficient',
+    'Q1': '🏆 Efficient BCC & Échelle',
     'Q2': '⚙️ Problème Échelle',
     'Q3': '🧠 Problème Gestion',
     'Q4': '🔴 Double Peine',
@@ -246,8 +246,8 @@ class HotelDEAAnalyzer:
         # échelle (ex. couts_op_ex en €) au détriment des autres (ex. TO en %).
         in_scale  = [max(float(self.inputs[:, j].mean()), 1e-9)  for j in range(n_in)]
         out_scale = [max(float(self.outputs[:, j].mean()), 1e-9) for j in range(n_out)]
-        model += (pulp.lpSum(s_in[j] / in_scale[j] for j in range(n_in))
-                  + pulp.lpSum(s_out[j] / out_scale[j] for j in range(n_out)))
+        model += (pulp.lpSum((1.0 / in_scale[j]) * s_in[j] for j in range(n_in))
+                  + pulp.lpSum((1.0 / out_scale[j]) * s_out[j] for j in range(n_out)))
 
         for j in range(n_in):
             model += (pulp.lpSum(lam2[k] * self.inputs[k, j] for k in range(self.n)) + s_in[j]
@@ -366,23 +366,37 @@ class HotelDEAAnalyzer:
     #  TOPSIS
     # ─────────────────────────────────────────────
     def _compute_topsis(self):
+        # Construire par position, et non avec df.loc[nom], afin de ne pas
+        # perdre une DMU lorsque l'index contient espaces/accents ou doublons.
+        # Les quatre critères sont validés numériquement avant le calcul.
+        if len(self.hotels) != len(set(self.hotels)):
+            raise ValueError("Noms d'hôtels dupliqués : index DMU non identifiable pour TOPSIS")
         matrix = np.array([
             [self.bcc_scores[h], self.scale_efficiency[h],
-             float(self.df.loc[h, 'revpar']), float(self.df.loc[h, 'taux_occupation'])]
-            for h in self.hotels
+             pd.to_numeric(self.df.iloc[i]['revpar'], errors='coerce'),
+             pd.to_numeric(self.df.iloc[i]['taux_occupation'], errors='coerce')]
+            for i, h in enumerate(self.hotels)
         ], dtype=float)
-        weights = np.array([0.35, 0.25, 0.25, 0.15])
-        norms   = np.sqrt((matrix ** 2).sum(axis=0)); norms[norms == 0] = 1e-10
-        weighted   = (matrix / norms) * weights
-        ideal_pos  = weighted.max(axis=0); ideal_neg = weighted.min(axis=0)
-        d_pos = np.sqrt(((weighted - ideal_pos) ** 2).sum(axis=1))
-        d_neg = np.sqrt(((weighted - ideal_neg) ** 2).sum(axis=1))
-        denom = d_pos + d_neg; denom[denom == 0] = 1e-10
-        scores = d_neg / denom
-        ranks  = (-scores).argsort().argsort() + 1
+        if matrix.shape[0] == 0 or not np.isfinite(matrix).all():
+            raise ValueError("TOPSIS : données non finies dans BCC/échelle/RevPAR/occupation")
+        weights = np.array(getattr(self, '_topsis_weights', [0.35, 0.25, 0.25, 0.15]), dtype=float)
+        if weights.shape != (4,) or not np.isfinite(weights).all() or weights.sum() <= 0:
+            weights = np.array([0.35, 0.25, 0.25, 0.15])
+        weights = weights / weights.sum()
+        norms = np.linalg.norm(matrix, axis=0)
+        norms = np.where(norms > 0, norms, 1.0)  # critère constant : contribution nulle
+        weighted = (matrix / norms) * weights
+        ideal_pos, ideal_neg = weighted.max(axis=0), weighted.min(axis=0)
+        d_pos = np.linalg.norm(weighted - ideal_pos, axis=1)
+        d_neg = np.linalg.norm(weighted - ideal_neg, axis=1)
+        denom = d_pos + d_neg
+        scores = np.divide(d_neg, denom, out=np.full(len(self.hotels), 0.5), where=denom > 0)
+        # Rang dense déterministe : tous les scores, dont le dernier, sont gardés.
+        order = np.lexsort((np.arange(len(scores)), -scores))
+        ranks = np.empty(len(scores), dtype=int); ranks[order] = np.arange(1, len(scores) + 1)
         for i, h in enumerate(self.hotels):
             self.topsis_scores[h] = round(float(scores[i]), 4)
-            self.topsis_ranks[h]  = int(ranks[i])
+            self.topsis_ranks[h] = int(ranks[i])
 
     # ─────────────────────────────────────────────
     #  K-means
@@ -1245,10 +1259,10 @@ class HotelDEAAnalyzer:
             S_out  = [pulp.LpVariable(f"So{r}", lowBound=0) for r in range(s)]
 
             # Objectif : τ = t − (1/m)Σ(Sᵢ⁻/rᵢ)
-            prob += t - (1.0 / m) * pulp.lpSum(S_in[i]  / x_range[i] for i in range(m))
+            prob += t - (1.0 / m) * pulp.lpSum((1.0 / x_range[i]) * S_in[i] for i in range(m))
 
             # Normalisation : t + (1/s)Σ(Sᵣ⁺/rᵣ) = 1
-            prob += t + (1.0 / s) * pulp.lpSum(S_out[r] / y_range[r] for r in range(s)) == 1
+            prob += t + (1.0 / s) * pulp.lpSum((1.0 / y_range[r]) * S_out[r] for r in range(s)) == 1
 
             # Inputs  : ΣΛⱼ·xᵢⱼ + Sᵢ⁻ = t·xᵢ₀
             for i in range(m):
