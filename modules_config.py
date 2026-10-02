@@ -179,8 +179,8 @@ MODULES: dict[str, dict] = {
                 "unit": "m²",
                 "required": False,
             },
-            "capex": {
-                "label": "CAPEX période",
+            "capex_annuel": {
+                "label": "CAPEX annuel / période",
                 "unit": "€",
                 "required": False,
             },
@@ -529,6 +529,31 @@ def get_required_outputs(module_id: str) -> list[str]:
     ]
 
 
+def normalize_column_aliases(columns) -> list[str]:
+    """Normalise les anciens noms de colonnes vers les clés canoniques.
+
+    ``capex_annuel`` est le nom officiel. L'ancien ``capex`` reste accepté
+    en entrée afin que les datasets/configurations historiques restent
+    utilisables, sans jamais remplacer la colonne canonique si elle existe.
+    Accepte une liste de noms ou tout itérable de noms (p. ex. ``df.columns``).
+    """
+    cols = list(columns)
+    if "capex_annuel" not in cols and "capex" in cols:
+        cols = ["capex_annuel" if col == "capex" else col for col in cols]
+    return cols
+
+
+def normalize_dataframe_columns(df):
+    """Retourne une copie avec l'ancien alias ``capex`` mappé vers ``capex_annuel``.
+
+    Le renommage n'est effectué que si la colonne canonique est absente,
+    ce qui évite toute collision et tout accès à une colonne inexistante.
+    """
+    if "capex" in df.columns and "capex_annuel" not in df.columns:
+        return df.rename(columns={"capex": "capex_annuel"})
+    return df
+
+
 def check_module_feasibility(module_id: str, available_cols: list[str],
                               proxy_cols: "set[str] | None" = None) -> dict:
     """
@@ -553,7 +578,8 @@ def check_module_feasibility(module_id: str, available_cols: list[str],
         }
     """
     m = MODULES[module_id]
-    proxy_cols = proxy_cols or set()
+    available_cols = normalize_column_aliases(available_cols)
+    proxy_cols = set(normalize_column_aliases(proxy_cols or set()))
     real_cols = [c for c in available_cols if c not in proxy_cols]
     all_expected = (
         list(m["inputs"].keys())
