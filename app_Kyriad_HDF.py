@@ -345,7 +345,7 @@ def generate_fiche_actif_pdf(
     return buf.getvalue()
 
 
-def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
+def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
                                   cap_input=None, sw_results=None,
                                   jours_exploit: int = 365,
                                   ft_pct: float = 0.50,
@@ -643,7 +643,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         "idéale et à la solution anti-idéale.", meth_s))
 
     top_data = [["Rg", "Hôtel", "TOPSIS", "BCC", "Échelle", "Quadrant"]]
-    for _, r in dea.get_topsis_ranking().head(top_n).iterrows():
+    for _, r in dea.get_topsis_ranking().head(dea.n if top_n is None else min(top_n, dea.n)).iterrows():
         h = r["Hôtel"]; q = dea.quadrants.get(h, "")
         top_data.append([f"{int(r['Rang'])}", _clean(h, 40), f"{r['Score TOPSIS']:.3f}",
                          f"{dea.bcc_scores.get(h,0):.1%}",
@@ -664,7 +664,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         se_df = dea.compute_super_efficiency()
         _n_se_total = len(se_df)
         sd = [["Hôtel", "BCC", "Super-eff.", "Lecture"]]
-        for _, r in se_df.head(min(12, len(se_df))).iterrows():
+        for _, r in se_df.iterrows():
             _se  = r['Super-Efficience']
             _bccv = dea.bcc_scores.get(r['Hôtel'], 0)
             if isinstance(_se, (int, float)) and _bccv >= 0.999:
@@ -676,11 +676,6 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             sd.append([_clean(r['Hôtel'], 42), _clean(r['BCC']),
                        f"{_se:.3f}" if isinstance(_se, (int, float)) else _clean(_se),
                        _lec])
-        if _n_se_total > 12:
-            story.append(Paragraph(
-                f"Tableau limité aux 12 premiers actifs (sur {_n_se_total} au total, triés par "
-                f"super-efficience) — les lectures ci-dessous portent sur l'ensemble du portefeuille, "
-                f"pas uniquement sur les lignes affichées.", small_s))
         story.append(_tbl(sd, [6.6*cm, 1.9*cm, 2.2*cm, 6.7*cm],
                           align_right=[1, 2]))
 
@@ -825,7 +820,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
         _qlab = {'Q1': "Efficient", 'Q2': "Problème d'échelle",
                  'Q3': "Problème de gestion", 'Q4': "Double peine"}
         _tot_sal = 0.0
-        for h in crit[:14]:
+        for h in crit:
             _row = [_clean(h, 34), f"{dea.bcc_scores[h]:.1%}",
                     _qlab.get(dea.quadrants.get(h, ""), "—")]
             for c in _act_in:
@@ -1165,15 +1160,28 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
             })
         cap_rows_pdf.sort(key=lambda r: (r['goppam'] is None, -(r['goppam'] or 0)))
 
-        cpd = [["Hôtel", "BCC", "GOPPAM (€/m²)", "CAPEX/chambre (k€)", "Rend. CAPEX (x)", "Marge GOP"]]
-        for r in cap_rows_pdf:
-            cpd.append([_clean(r['h'], 36), f"{r['bcc']:.1%}",
-                        f"{r['goppam']:.0f}"  if r['goppam']  else "—",
-                        f"{r['capexch']:.2f}" if r['capexch'] else "—",
-                        f"{r['rend']:.1f}"    if r['rend']    else "—",
-                        f"{r['marge']:.1f}%"  if r['marge']   else "—"])
-        story.append(_tbl(cpd, [5.6*cm, 1.8*cm, 2.8*cm, 2.7*cm, 2.7*cm, 2.0*cm],
-                          align_right=[1, 2, 3, 4, 5]))
+        # Ne pas afficher de colonnes entièrement vides : aucune valeur CAPEX/GOP
+        # ne doit être remplacée par une succession de « — » dans le PDF.
+        _cap_specs = [
+            ('goppam', "GOPPAM (€/m²)", lambda v: f"{v:.0f}"),
+            ('capexch', "CAPEX/chambre (k€)", lambda v: f"{v:.2f}"),
+            ('rend', "Rend. CAPEX (x)", lambda v: f"{v:.1f}"),
+            ('marge', "Marge GOP", lambda v: f"{v:.1f}%"),
+        ]
+        _cap_specs = [(k, label, fmt) for k, label, fmt in _cap_specs
+                      if any(r[k] is not None for r in cap_rows_pdf)]
+        if _cap_specs:
+            cpd = [["Hôtel", "BCC"] + [label for _, label, _ in _cap_specs]]
+            for r in cap_rows_pdf:
+                cpd.append([_clean(r['h'], 36), f"{r['bcc']:.1%}"] +
+                           [fmt(r[k]) if r[k] is not None else "—"
+                            for k, _, fmt in _cap_specs])
+            _cap_widths = [5.6*cm, 1.8*cm] + [11.0*cm / len(_cap_specs)] * len(_cap_specs)
+            story.append(_tbl(cpd, _cap_widths,
+                              align_right=list(range(1, len(_cap_specs) + 2))))
+        else:
+            story.append(Paragraph(
+                "Module non activé – données CAPEX / GOP requises.", body_s))
 
         _gv = [r['goppam'] for r in cap_rows_pdf if r['goppam']]
         _mv = [r['marge']  for r in cap_rows_pdf if r['marge']]
@@ -1324,10 +1332,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                        "résultat.")))
         else:
             story.append(Paragraph(
-                "Flow Through non calculable : les colonnes revpar_n1 et gop_n1 sont "
-                "requises pour établir la baseline N-1 par actif. Une baseline unique "
-                "appliquée à l'ensemble du portefeuille produirait des résultats non "
-                "significatifs dès lors que les RevPAR sont hétérogènes.", body_s))
+                "Module non activé – données N-1 / GOP requises.", body_s))
     else:
         story.append(Paragraph(
             "Le fichier source ne contient aucune donnée de capital. Les sections 9 à 11 "
@@ -1375,48 +1380,52 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = 10,
                 "taux_occupation_n1) sont requises dans le fichier source.", body_s))
         else:
             _calc = _mq[_mq['Malmquist TFP'] != '—'].copy()
-            md2 = [["Hôtel", "BCC N-1", "BCC N", "Catch-up", "Frontier shift", "TFP", "Lecture"]]
-            for _, r in _mq.iterrows():
-                try:
-                    if float(r['Catch-up']) < 1.0:
-                        _sig(r['Hôtel'], 'recul')
-                except Exception:
-                    pass
-                _cat = r.get('Catégorie')
-                _cat = "Non calculable" if (not isinstance(_cat, str) or not _cat) else _cat
-                md2.append([_clean(r['Hôtel'], 42), _clean(r['BCC N-1']), _clean(r['BCC N']),
-                            _clean(r['Catch-up']), _clean(r['Frontier Shift']),
-                            _clean(r['Malmquist TFP']), _clean(_cat, 18)])
-            story.append(_tbl(md2, [6.2*cm, 1.5*cm, 1.4*cm, 1.7*cm, 2.1*cm, 1.5*cm, 3.0*cm],
-                              align_right=[1, 2, 3, 4, 5]))
-
-            _nc = len(_mq) - len(_calc)
-            if _nc > 0:
+            if _calc.empty:
                 story.append(Paragraph(
-                    f"{_nc} actif(s) non calculables : l'indice exige que l'hôtel soit "
-                    "évaluable sur les deux frontières (N-1 et N). Les unités situées aux "
-                    "bornes de l'échantillon sortent parfois du domaine de faisabilité du "
-                    "programme linéaire croisé — limite connue de la méthode, sans "
-                    "conséquence sur les autres résultats.", small_s))
+                    "Module non activé – données N-1 / GOP requises.", body_s))
+            else:
+                md2 = [["Hôtel", "BCC N-1", "BCC N", "Catch-up", "Frontier shift", "TFP", "Lecture"]]
+                for _, r in _mq.iterrows():
+                    try:
+                        if float(r['Catch-up']) < 1.0:
+                            _sig(r['Hôtel'], 'recul')
+                    except Exception:
+                        pass
+                    _cat = r.get('Catégorie')
+                    _cat = "Non calculable" if (not isinstance(_cat, str) or not _cat) else _cat
+                    md2.append([_clean(r['Hôtel'], 42), _clean(r['BCC N-1']), _clean(r['BCC N']),
+                                _clean(r['Catch-up']), _clean(r['Frontier Shift']),
+                                _clean(r['Malmquist TFP']), _clean(_cat, 18)])
+                story.append(_tbl(md2, [6.2*cm, 1.5*cm, 1.4*cm, 1.7*cm, 2.1*cm, 1.5*cm, 3.0*cm],
+                                  align_right=[1, 2, 3, 4, 5]))
 
-            if len(_calc) > 0:
-                _cu = pd.to_numeric(_calc['Catch-up'], errors='coerce')
-                _fs = pd.to_numeric(_calc['Frontier Shift'], errors='coerce')
-                _tf = pd.to_numeric(_calc['Malmquist TFP'], errors='coerce')
-                _n_maree = int(((_cu <= 1.0) & (_tf > 1.0)).sum())
-                _n_alpha = int(((_cu > 1.0) & (_tf > 1.0)).sum())
-                _txt = (f"Frontier shift moyen de {_fs.mean():.3f} : la frontière du "
-                        f"portefeuille s'est {'déplacée vers le haut' if _fs.mean() > 1 else 'contractée'} "
-                        f"de {abs(_fs.mean()-1)*100:.1f} % entre les deux exercices. ")
-                if _n_maree > 0:
-                    _txt += (f"{_n_maree} actif(s) affichent une productivité en hausse sans "
-                             "progrès de gestion propre — leur amélioration vient "
-                             "intégralement du marché. C'est une performance empruntée, pas "
-                             "acquise : elle ne survivra pas à un retournement de cycle. ")
-                if _n_alpha > 0:
-                    _txt += (f"{_n_alpha} actif(s) combinent rattrapage et marché porteur — "
-                             "c'est là que se trouve la création de valeur réelle.")
-                story.append(_lecture(_txt))
+                _nc = len(_mq) - len(_calc)
+                if _nc > 0:
+                    story.append(Paragraph(
+                        f"{_nc} actif(s) non calculables : l'indice exige que l'hôtel soit "
+                        "évaluable sur les deux frontières (N-1 et N). Les unités situées aux "
+                        "bornes de l'échantillon sortent parfois du domaine de faisabilité du "
+                        "programme linéaire croisé — limite connue de la méthode, sans "
+                        "conséquence sur les autres résultats.", small_s))
+
+                if len(_calc) > 0:
+                    _cu = pd.to_numeric(_calc['Catch-up'], errors='coerce')
+                    _fs = pd.to_numeric(_calc['Frontier Shift'], errors='coerce')
+                    _tf = pd.to_numeric(_calc['Malmquist TFP'], errors='coerce')
+                    _n_maree = int(((_cu <= 1.0) & (_tf > 1.0)).sum())
+                    _n_alpha = int(((_cu > 1.0) & (_tf > 1.0)).sum())
+                    _txt = (f"Frontier shift moyen de {_fs.mean():.3f} : la frontière du "
+                            f"portefeuille s'est {'déplacée vers le haut' if _fs.mean() > 1 else 'contractée'} "
+                            f"de {abs(_fs.mean()-1)*100:.1f} % entre les deux exercices. ")
+                    if _n_maree > 0:
+                        _txt += (f"{_n_maree} actif(s) affichent une productivité en hausse sans "
+                                 "progrès de gestion propre — leur amélioration vient "
+                                 "intégralement du marché. C'est une performance empruntée, pas "
+                                 "acquise : elle ne survivra pas à un retournement de cycle. ")
+                    if _n_alpha > 0:
+                        _txt += (f"{_n_alpha} actif(s) combinent rattrapage et marché porteur — "
+                                 "c'est là que se trouve la création de valeur réelle.")
+                    story.append(_lecture(_txt))
     except Exception as _e:
         story.append(Paragraph(f"Malmquist non calculable ({_clean(_e, 90)}).", body_s))
 
@@ -5103,16 +5112,13 @@ with tab_capital:
             _manque = []
             if not _has_rev_n1: _manque.append('`revpar_n1`')
             if not _has_gop_n1: _manque.append('`gop_n1`')
-            st.warning(
-                f"⚠️ Colonne(s) manquante(s) : {', '.join(_manque)}. "
-                "Baseline unique appliquée à tous les hôtels — approximation "
-                "grossière si les RevPAR sont hétérogènes."
+            st.info(
+                "Module non activé – données N-1 / GOP requises. "
+                f"Colonnes manquantes : {', '.join(_manque)}."
             )
-            col_fx1, col_fx2 = st.columns(2)
-            with col_fx1:
-                base_revpar_ft = st.number_input('RevPAR baseline N-1 ou Budget (€)', value=0.0, step=1.0, key='ft_revpar')
-            with col_fx2:
-                base_gop_pct_ft = st.number_input('Marge GOP% baseline (%)', value=35.0, step=0.5, key='ft_gop')
+            # Ne pas proposer de baseline ou de benchmark de remplacement :
+            # cela créerait des données non fournies par l'utilisateur.
+            base_revpar_ft, base_gop_pct_ft = None, None
 
         flex_rows = []
         if not dea.has_chambres:
@@ -5175,8 +5181,9 @@ with tab_capital:
                 'Driver revenu'  : driver_ft if src.startswith('Calculé') else '--',
             })
     
-        st.dataframe(pd.DataFrame(flex_rows), use_container_width=True, hide_index=True)
-        st.info('FT > 50% = bonne conversion revenus -> profit. FT < 50% = charges variables elevees. Expense Flex calcule quand CA baisse.')
+        if _n1_mode:
+            st.dataframe(pd.DataFrame(flex_rows), use_container_width=True, hide_index=True)
+            st.info('FT > 50% = bonne conversion revenus -> profit. FT < 50% = charges variables elevees. Expense Flex calcule quand CA baisse.')
 
 # TAB 10 — MALMQUIST & TOBIT
 # ══════════════════════════════════════════════
@@ -5892,14 +5899,14 @@ sont automatiquement mappées vers les noms standard des modules.*
     _rpc1, _rpc2 = st.columns([3, 1])
     with _rpc1:
         # Garde-fou : petit portefeuille (n < 4) → slider impossible (min > max)
-        _tn_max = min(20, dea.n)
+        _tn_max = dea.n
         if _tn_max <= 3:
             top_n_portfolio = dea.n
             st.caption(f"Portefeuille de {dea.n} hôtels — Top complet inclus.")
         else:
             top_n_portfolio = st.slider(
                 "Hôtels affichés dans le classement TOPSIS", 3, _tn_max,
-                min(10, _tn_max), key="top_n_slider")
+                _tn_max, key="top_n_slider")
     with _rpc2:
         st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
         if st.button("📊 Générer le rapport", key="portfolio_pdf_btn",
