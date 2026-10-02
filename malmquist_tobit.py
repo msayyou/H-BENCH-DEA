@@ -8,8 +8,41 @@ Tobit     : Tobin (1958) ; Simar & Wilson (2007) second stage DEA
 from __future__ import annotations
 import numpy as np
 import pandas as pd
-import pulp
+try:
+    import pulp
+except Exception:  # solveur optionnel : les calculs DEA deviennent non calculables
+    pulp = None
 from scipy import stats, optimize
+
+
+
+def _get_df(dea):
+    """Retourne un DataFrame exploitable, sinon DataFrame vide."""
+    df = getattr(dea, 'df', None)
+    return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+
+def _get_hotels(dea, df=None):
+    """Accès sûr aux hôtels, limité aux lignes réellement présentes."""
+    hotels = getattr(dea, 'hotels', []) or []
+    if df is None:
+        df = _get_df(dea)
+    return [h for h in hotels if h in df.index] if isinstance(df, pd.DataFrame) else []
+
+
+def _find_col(df, name):
+    """Résout un nom de colonne exact ou insensible à la casse."""
+    if name in df.columns:
+        return name
+    wanted = str(name).casefold()
+    return next((c for c in df.columns if str(c).casefold() == wanted), None)
+
+
+def _numeric_frame(df, cols, index=None):
+    """Extrait des colonnes en numérique, valeurs invalides -> NaN."""
+    out = df.reindex(index=index, columns=cols) if index is not None else df.reindex(columns=cols)
+    return out.apply(pd.to_numeric, errors='coerce').to_numpy(dtype=float)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MALMQUIST PRODUCTIVITY INDEX
@@ -23,31 +56,30 @@ _N1_COLS = {
     'taux_occupation' : 'taux_occupation_n1',
 }
 
-def _dea_cross(j: int,
-               X_eval: np.ndarray, Y_eval: np.ndarray,
-               X_ref:  np.ndarray, Y_ref:  np.ndarray) -> float | None:
-    """
-    Input-orienté BCC.
-    Évalue DMU j (données X_eval[j], Y_eval[j])
-    sur la frontière construite depuis (X_ref, Y_ref).
-    """
-    n_ref = X_ref.shape[0]
-    m_in  = X_ref.shape[1]
-    m_out = Y_ref.shape[1]
-
-    mdl = pulp.LpProblem(f"MQ_{j}", pulp.LpMinimize)
-    th  = pulp.LpVariable("theta", lowBound=0)
-    lam = pulp.LpVariable.dicts("lam", range(n_ref), lowBound=0)
-
-    mdl += th
-    for i in range(m_in):
-        mdl += pulp.lpSum(lam[k] * X_ref[k, i] for k in range(n_ref)) <= th * X_eval[j, i]
-    for r in range(m_out):
-        mdl += pulp.lpSum(lam[k] * Y_ref[k, r] for k in range(n_ref)) >= Y_eval[j, r]
-    mdl += pulp.lpSum(lam.values()) == 1  # BCC
-
-    mdl.solve(pulp.PULP_CBC_CMD(msg=False))
-    return round(pulp.value(th), 6) if mdl.status == 1 else None
+def _dea_cross(j: int, X_eval: np.ndarray, Y_eval: np.ndarray, X_ref: np.ndarray, Y_ref: np.ndarray) -> float | None:
+    """Input-orienté BCC, sécurisé contre solveur indisponible/infeasible."""
+    if pulp is None:
+        return None
+    try:
+        X_eval, Y_eval = np.asarray(X_eval, float), np.asarray(Y_eval, float)
+        X_ref, Y_ref = np.asarray(X_ref, float), np.asarray(Y_ref, float)
+        if j < 0 or j >= len(X_eval) or not (np.all(np.isfinite(X_eval)) and np.all(np.isfinite(Y_eval)) and np.all(np.isfinite(X_ref)) and np.all(np.isfinite(Y_ref))):
+            return None
+        n_ref, m_in, m_out = X_ref.shape[0], X_ref.shape[1], Y_ref.shape[1]
+        mdl = pulp.LpProblem(f"MQ_{j}", pulp.LpMinimize)
+        th = pulp.LpVariable("theta", lowBound=0)
+        lam = pulp.LpVariable.dicts("lam", range(n_ref), lowBound=0)
+        mdl += th
+        for i in range(m_in):
+            mdl += pulp.lpSum(lam[k] * X_ref[k, i] for k in range(n_ref)) <= th * X_eval[j, i]
+        for r in range(m_out):
+            mdl += pulp.lpSum(lam[k] * Y_ref[k, r] for k in range(n_ref)) >= Y_eval[j, r]
+        mdl += pulp.lpSum(lam.values()) == 1
+        status = mdl.solve(pulp.PULP_CBC_CMD(msg=False))
+        value = pulp.value(th)
+        return round(float(value), 6) if status == pulp.LpStatusOptimal and value is not None and np.isfinite(value) else None
+    except Exception:
+        return None
 
 
 def compute_malmquist(dea) -> pd.DataFrame | None:
@@ -67,24 +99,27 @@ def compute_malmquist(dea) -> pd.DataFrame | None:
     Réf. : Caves, Christensen & Diewert (1982) Econometrica
            Färe, Grosskopf, Norris & Zhang (1994) American Economic Review
     """
-    df = dea.df
-    # Vérifier colonnes _n1
-    missing = [v for v in _N1_COLS.values()
-               if v not in df.columns and v != 'satisfaction_n1']
+    df = _get_df(dea)
+    # Vérifier colonnes _n1 (exactes ou casse insensible)
+    resolved = {k: _find_col(df, v) for k, v in _N1_COLS.items()}
+    missing = [v for k, v in _N1_COLS.items() if resolved[k] is None and v != 'satisfaction_n1']
     if missing:
         return None
 
     input_cols  = ['nb_employes', 'couts_op_ex']
     output_cols = ['revpar', 'taux_occupation']
-    if 'satisfaction_n1' in df.columns:
+    if resolved.get('satisfaction') is not None:
         output_cols.append('satisfaction')
 
-    X1 = df[input_cols].values.astype(float)
-    Y1 = df[output_cols].values.astype(float)
-    X0 = df[[_N1_COLS[c] for c in input_cols]].values.astype(float)
-    Y0 = df[[_N1_COLS[c] for c in output_cols]].values.astype(float)
-
-    hotels = dea.hotels
+    cols_now = [_find_col(df, c) for c in input_cols + output_cols]
+    cols_old = [resolved.get(c) for c in input_cols + output_cols]
+    hotels = _get_hotels(dea, df)
+    if not hotels or any(c is None for c in cols_now + cols_old):
+        return None
+    X1 = _numeric_frame(df, cols_now[:len(input_cols)], hotels)
+    Y1 = _numeric_frame(df, cols_now[len(input_cols):], hotels)
+    X0 = _numeric_frame(df, cols_old[:len(input_cols)], hotels)
+    Y0 = _numeric_frame(df, cols_old[len(input_cols):], hotels)
     rows   = []
 
     for j, hotel in enumerate(hotels):
@@ -145,7 +180,7 @@ def compute_malmquist(dea) -> pd.DataFrame | None:
 
 def has_n1_cols(df: pd.DataFrame) -> list[str]:
     """Retourne la liste des colonnes _n1 présentes dans df."""
-    return [c for c in _N1_COLS.values() if c in df.columns]
+    return [c for c in _N1_COLS.values() if _find_col(df, c) is not None]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -201,17 +236,19 @@ def compute_tobit(
         env_labels = {}
 
     # Préparer les données
-    valid = [h for h in dea.hotels if all(
-        c in dea.df.columns and not pd.isna(dea.df.loc[h, c])
-        for c in env_vars
-    )]
+    df = _get_df(dea)
+    hotels = _get_hotels(dea, df)
+    resolved_env = {c: _find_col(df, c) for c in env_vars}
+    valid = [h for h in hotels if all(resolved_env[c] is not None for c in env_vars)]
+    valid = [h for h in valid if all(pd.to_numeric(df.loc[h, resolved_env[c]], errors='coerce') == pd.to_numeric(df.loc[h, resolved_env[c]], errors='coerce') for c in env_vars)]
     if len(valid) < len(env_vars) + 3:
         return {'error': f'Trop peu d\'observations valides ({len(valid)}) '
                          f'pour {len(env_vars)} régresseurs.'}
 
-    y = np.array([dea.bcc_scores[h] for h in valid])
-    X_raw = np.column_stack([dea.df.loc[valid, c].values.astype(float)
-                             for c in env_vars])
+    scores = getattr(dea, 'bcc_scores', {}) or {}
+    valid = [h for h in valid if pd.to_numeric(scores.get(h), errors='coerce') == pd.to_numeric(scores.get(h), errors='coerce')]
+    y = pd.to_numeric(pd.Series([scores.get(h) for h in valid]), errors='coerce').to_numpy(dtype=float)
+    X_raw = _numeric_frame(df, [resolved_env[c] for c in env_vars], valid)
 
     # Rejeter les régresseurs constants — même raisonnement que Simar-Wilson
     # ci-dessous : un écart-type nul rend le coefficient non identifié.
@@ -235,11 +272,12 @@ def compute_tobit(
     p0[0] = float(np.mean(y))
     p0[-1] = max(float(np.std(y)), 0.05)
 
-    res = optimize.minimize(
-        _tobit_loglik, p0, args=(y, X_fit, 1.0),
-        method='Nelder-Mead',
-        options={'maxiter': 10000, 'xatol': 1e-7, 'fatol': 1e-7},
-    )
+    try:
+        res = optimize.minimize(_tobit_loglik, p0, args=(y, X_fit, 1.0), method='Nelder-Mead', options={'maxiter': 10000, 'xatol': 1e-7, 'fatol': 1e-7})
+    except Exception as exc:
+        return {'error': f'Optimisation Tobit échouée : {exc}'}
+    if not getattr(res, 'success', False) or not np.all(np.isfinite(res.x)) or not np.isfinite(res.fun):
+        return {'error': f'Optimisation Tobit non convergente : {getattr(res, "message", "statut inconnu")}'}
 
     beta_hat  = res.x[:-1]
     sigma_hat = max(abs(res.x[-1]), 1e-6)
@@ -329,19 +367,27 @@ MDEA_COL_MAP = {
 }
 
 def _bcc_input(j: int, X: np.ndarray, Y: np.ndarray) -> float | None:
-    """BCC input-orienté. Retourne theta ∈ ]0,1]."""
-    n, m_in = X.shape; m_out = Y.shape[1]
-    mp  = pulp.LpProblem(f"BCC_{j}", pulp.LpMinimize)
-    th  = pulp.LpVariable("theta", lowBound=0)
-    lam = pulp.LpVariable.dicts("lam", range(n), lowBound=0)
-    mp += th
-    for i in range(m_in):
-        mp += pulp.lpSum(lam[k] * X[k, i] for k in range(n)) <= th * X[j, i]
-    for r in range(m_out):
-        mp += pulp.lpSum(lam[k] * Y[k, r] for k in range(n)) >= Y[j, r]
-    mp += pulp.lpSum(lam.values()) == 1
-    mp.solve(pulp.PULP_CBC_CMD(msg=False))
-    return round(float(pulp.value(th)), 4) if mp.status == 1 else None
+    """BCC input-orienté sécurisé."""
+    if pulp is None:
+        return None
+    try:
+        X, Y = np.asarray(X, float), np.asarray(Y, float)
+        if j < 0 or j >= len(X) or not (np.all(np.isfinite(X)) and np.all(np.isfinite(Y))):
+            return None
+        n, m_in, m_out = X.shape[0], X.shape[1], Y.shape[1]
+        mp = pulp.LpProblem(f"BCC_{j}", pulp.LpMinimize)
+        th = pulp.LpVariable("theta", lowBound=0)
+        lam = pulp.LpVariable.dicts("lam", range(n), lowBound=0)
+        mp += th
+        for i in range(m_in):
+            mp += pulp.lpSum(lam[k] * X[k, i] for k in range(n)) <= th * X[j, i]
+        for r in range(m_out):
+            mp += pulp.lpSum(lam[k] * Y[k, r] for k in range(n)) >= Y[j, r]
+        mp += pulp.lpSum(lam.values()) == 1
+        status = mp.solve(pulp.PULP_CBC_CMD(msg=False)); value = pulp.value(th)
+        return round(float(value), 4) if status == pulp.LpStatusOptimal and value is not None and np.isfinite(value) else None
+    except Exception:
+        return None
 
 
 def compute_mdea_room_fb(dea) -> dict:
@@ -375,8 +421,8 @@ def compute_mdea_room_fb(dea) -> dict:
     """
     from scipy import stats as _stats
 
-    df = dea.df
-    hotels = dea.hotels
+    df = _get_df(dea)
+    hotels = _get_hotels(dea, df)
 
     # Détection colonnes disponibles
     room_in_avail  = [c for c in MDEA_COL_MAP['room']['inputs']   if c in df.columns]
@@ -394,10 +440,10 @@ def compute_mdea_room_fb(dea) -> dict:
         return {'feasible': False, 'missing_cols': list(set(missing)),
                 'scores': pd.DataFrame(), 'summary': pd.DataFrame(), 'mw_test': {}}
 
-    X_room = df[room_in_avail].values.astype(float)
-    Y_room = df[room_out_avail].values.astype(float)
-    X_fb   = df[fb_in_avail].values.astype(float)
-    Y_fb   = df[fb_out_avail].values.astype(float)
+    X_room = _numeric_frame(df, room_in_avail, hotels)
+    Y_room = _numeric_frame(df, room_out_avail, hotels)
+    X_fb   = _numeric_frame(df, fb_in_avail, hotels)
+    Y_fb   = _numeric_frame(df, fb_out_avail, hotels)
 
     # Colonnes partagées disponibles (pour info seulement)
     shared_avail = [c for c in MDEA_COL_MAP['shared_inputs'] if c in df.columns]
@@ -504,10 +550,12 @@ def mann_whitney_groups(dea, groups: pd.Series) -> dict:
     from scipy import stats as _stats
     from itertools import combinations
 
-    unique_g = [g for g in groups.loc[dea.hotels].unique() if str(g) != 'nan']
+    hotels = _get_hotels(dea, _get_df(dea))
+    groups = groups if isinstance(groups, pd.Series) else pd.Series(dtype=object)
+    unique_g = [g for g in groups.reindex(hotels).dropna().unique()]
     grp_scores = {}
     for g in unique_g:
-        h_list = [h for h in dea.hotels if groups.get(h) == g]
+        h_list = [h for h in hotels if groups.get(h) == g and h in (getattr(dea, 'bcc_scores', {}) or {}) and pd.to_numeric((getattr(dea, 'bcc_scores', {}) or {}).get(h), errors='coerce') == pd.to_numeric((getattr(dea, 'bcc_scores', {}) or {}).get(h), errors='coerce')]
         if len(h_list) >= 2:
             grp_scores[g] = [dea.bcc_scores[h] for h in h_list]
 
@@ -596,7 +644,7 @@ def build_stage2_vars(dea) -> list:
 
     # 5. Log taille
     if 'nb_chambres' in df.columns:
-        df['log_nb_chambres'] = np.log(df['nb_chambres'].replace(0, np.nan).astype(float)).round(4)
+        df['log_nb_chambres'] = np.log(pd.to_numeric(df['nb_chambres'], errors='coerce').replace(0, np.nan)).round(4)
         added.append('log_nb_chambres')
 
     return added
@@ -632,11 +680,12 @@ def _fit_sw(y: np.ndarray, X: np.ndarray,
         p0       = np.zeros(k + 1)
         p0[0]    = float(np.mean(y))
         p0[-1]   = max(float(np.std(y)), 0.05)
-    res = optimize.minimize(
-        _sw_truncated_loglik, p0, args=(y, X, upper),
-        method='Nelder-Mead',
-        options={'maxiter': 15000, 'xatol': 1e-8, 'fatol': 1e-8},
-    )
+    try:
+        res = optimize.minimize(_sw_truncated_loglik, p0, args=(y, X, upper), method='Nelder-Mead', options={'maxiter': 15000, 'xatol': 1e-8, 'fatol': 1e-8})
+    except Exception:
+        return np.full(k, np.nan), np.nan, False, np.nan
+    if not getattr(res, 'success', False) or not np.all(np.isfinite(res.x)) or not np.isfinite(res.fun):
+        return np.full(k, np.nan), np.nan, False, np.nan
     beta_hat  = res.x[:-1]
     sigma_hat = max(abs(res.x[-1]), 1e-6)
     return beta_hat, sigma_hat, res.success, -res.fun
@@ -677,17 +726,19 @@ def compute_simar_wilson(
         env_labels = {}
 
     # ── Données ──────────────────────────────────────────────────────────────
-    valid = [h for h in dea.hotels if all(
-        c in dea.df.columns and not pd.isna(dea.df.loc[h, c])
-        for c in env_vars
-    )]
+    df = _get_df(dea)
+    hotels = _get_hotels(dea, df)
+    resolved_env = {c: _find_col(df, c) for c in env_vars}
+    valid = [h for h in hotels if all(resolved_env[c] is not None for c in env_vars)]
+    valid = [h for h in valid if all(pd.to_numeric(df.loc[h, resolved_env[c]], errors='coerce') == pd.to_numeric(df.loc[h, resolved_env[c]], errors='coerce') for c in env_vars)]
     if len(valid) < len(env_vars) + 3:
         return {'error': f'Trop peu d\'observations valides ({len(valid)}) '
                          f'pour {len(env_vars)} régresseurs.'}
 
-    y_all = np.array([dea.bcc_scores[h] for h in valid])
-    Z_raw = np.column_stack([dea.df.loc[valid, c].values.astype(float)
-                             for c in env_vars])
+    scores = getattr(dea, 'bcc_scores', {}) or {}
+    valid = [h for h in valid if pd.to_numeric(scores.get(h), errors='coerce') == pd.to_numeric(scores.get(h), errors='coerce')]
+    y_all = pd.to_numeric(pd.Series([scores.get(h) for h in valid]), errors='coerce').to_numpy(dtype=float)
+    Z_raw = _numeric_frame(df, [resolved_env[c] for c in env_vars], valid)
 
     # Rejeter les régresseurs constants — un écart-type nul rend le
     # coefficient non identifié par les données (la colonne normalisée
@@ -764,6 +815,9 @@ def compute_simar_wilson(
     # ── Dé-normalisation ──────────────────────────────────────────────────────
     k      = Z_fit.shape[1]
     labels = ['Constante'] + [env_labels.get(c, c) for c in env_vars]
+
+    if not np.all(np.isfinite(beta_hat)) or not np.isfinite(sigma_hat):
+        return {'error': 'Régression Simar-Wilson non convergente ou résultat non fini.'}
 
     def _denorm(arr):
         out = arr.copy()
