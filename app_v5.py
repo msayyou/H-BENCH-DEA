@@ -1986,6 +1986,14 @@ with st.sidebar:
         help="Excel recommandé — évite les erreurs de séparateur et les virgules "
              "dans les noms d'hôtels.",
     )
+    use_demo = st.checkbox(
+        "📦 Jeu de démo Kyriad HDF (21 hôtels)",
+        value=(uploaded_file is None),
+        help="Données non vérifiées, pour explorer l'app sans fichier. "
+             "Ignoré dès qu'un fichier est importé.",
+    )
+    if use_demo and uploaded_file is None:
+        st.session_state['_force_illustrative'] = True
 
 # ─────────────────────────────────────────────
 #  Chargement des données
@@ -2007,6 +2015,37 @@ def _to_num(s: pd.Series) -> pd.Series:
     t = t.where(~_both, t.str.replace(',', '', regex=False))
     t = t.str.replace(',', '.', regex=False)
     return pd.to_numeric(t.replace({'': np.nan, 'nan': np.nan, 'None': np.nan}), errors='coerce')
+
+
+_DEMO_KYRIAD_CSV = """hotel_name,nb_chambres,nb_employes,couts_op_ex,revpar,satisfaction,taux_occupation
+Kyriad Amiens,65,12,475000.0,58.2,84.5,68.5
+Kyriad Beauvais,55,10,410000.0,52.4,82.0,66.3
+Kyriad Béthune,50,9,355000.0,48.1,81.0,65.0
+Kyriad Bruay-la-Buissière,48,8,330000.0,45.0,79.5,64.3
+Kyriad Calais,68,13,515000.0,61.5,86.0,69.1
+Kyriad Cambrai,50,9,345000.0,47.0,80.5,65.3
+Kyriad Chantilly,72,14,550000.0,66.8,88.5,71.2
+Kyriad Compiègne,60,11,443000.0,55.0,83.5,67.1
+Kyriad Coquelles,64,12,483000.0,59.1,85.0,68.0
+Kyriad Crépy-en-Valois,45,8,315000.0,43.5,78.0,64.0
+Kyriad Douai,52,10,365000.0,50.2,82.2,66.9
+Kyriad Etaples,50,9,338000.0,46.5,80.0,65.5
+Kyriad Laon,48,9,320000.0,44.8,79.0,64.9
+Kyriad Lille,75,15,600000.0,72.0,90.0,73.5
+Kyriad Lomme,62,11,451000.0,56.2,84.0,67.7
+Kyriad Péronne,44,8,310000.0,42.0,77.5,63.5
+Kyriad Roncq,58,10,430000.0,54.1,83.0,66.8
+Kyriad Rouvignies,47,8,323000.0,43.8,78.5,64.1
+Kyriad Saint-Laurent-Blangy,53,10,373000.0,51.0,82.5,67.1
+Kyriad Saint-Quentin,51,9,358000.0,49.0,81.5,65.8
+Kyriad Villeneuve D'Ascq,66,12,502000.0,60.3,85.5,68.6
+"""
+
+
+def load_sample_kyriad() -> pd.DataFrame:
+    """Jeu de démo : 21 Kyriad Hauts-de-France (colonnes DEA-H standard uniquement).
+    Données non vérifiées → `illustrative_data` forcé à True quand ce jeu est actif."""
+    return pd.read_csv(StringIO(_DEMO_KYRIAD_CSV), index_col=0)
 
 
 
@@ -2142,6 +2181,12 @@ if uploaded_file is not None:
     if st.session_state.get('_csv_hash') != _new_hash:
         st.session_state['module_results'] = {}
         st.session_state['_csv_hash'] = _new_hash
+elif use_demo:
+    df = load_sample_kyriad()
+    if st.session_state.get('_csv_hash') != 'demo':      # invalide le cache module au changement de source
+        st.session_state['module_results'] = {}
+        st.session_state['_csv_hash'] = 'demo'
+    st.sidebar.info("📦 Jeu de démo Kyriad HDF chargé (21 hôtels) — données non vérifiées")
 else:
     st.session_state.pop('_n_hotels_loaded', None)
     st.session_state.pop('_has_ch_loaded', None)
