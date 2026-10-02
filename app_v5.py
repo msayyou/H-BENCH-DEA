@@ -2009,7 +2009,7 @@ def _to_num(s: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(s):
         return pd.to_numeric(s, errors='coerce')
     t = (s.astype(str)
-           .str.replace(r'[\s\u00a0\u202f]', '', regex=True)
+           .str.replace('[\\s\u00a0\u202f]', '', regex=True)
            .str.replace(r'[%€$£]', '', regex=True))
     _both = t.str.contains('.', regex=False) & t.str.contains(',', regex=False)
     t = t.where(~_both, t.str.replace(',', '', regex=False))
@@ -2290,6 +2290,11 @@ with st.sidebar.expander("📂 Enrichir avec données réelles (débloquer des m
                             f"pour {int((_dev > 0.10).sum())} hôtel(s) (écart médian {_dev.median():.0%}). "
                             "Vérifiez période, périmètre (année pleine ?) ou cochez « Données illustratives »."
                         )
+                st.download_button(
+                    "⬇️ Télécharger le tableau enrichi (CSV)",
+                    data=_df_mm.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="dea_h_tableau_enrichi.csv", mime="text/csv", key="mm_enrich_dl",
+                )
         except Exception as _e:
             st.error(f"Import impossible : {_e}")
 
