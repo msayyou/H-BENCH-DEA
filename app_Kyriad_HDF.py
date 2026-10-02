@@ -8,10 +8,33 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 # Matplotlib est utilisé uniquement pour les figures intégrées au PDF.
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
+# L'application reste utilisable sans cette dépendance : les graphiques PDF
+# concernés sont alors simplement omis.
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    matplotlib = None
+    plt = None
+    FuncFormatter = None
+    MATPLOTLIB_AVAILABLE = False
+
+# Seuil unique de lecture de l'efficience DEA. Les scores DEA sont des
+# fractions (1.0 = 100 %), mais _score_fraction accepte aussi des pourcentages.
+SEUIL_EFFICIENCE = 1.0
+TOLERANCE_EFFICIENCE = 1e-6
+def _score_fraction(value):
+    value = pd.to_numeric(value, errors="coerce")
+    if pd.isna(value):
+        return 0.0
+    value = float(value)
+    return value / 100.0 if abs(value) > 1.0 + TOLERANCE_EFFICIENCE else value
+
+def _est_efficient(value):
+    return _score_fraction(value) >= SEUIL_EFFICIENCE - TOLERANCE_EFFICIENCE
 from datetime import datetime
 import warnings
 import requests
@@ -384,6 +407,8 @@ def detect_data_period(dataframe) -> str:
 
 # ── Figures PDF : Synthèse exécutive / catégorisation / CAPEX ───────────────
 def _pdf_mpl_image(fig, Image, width_cm=17.4, height_cm=None):
+    if not MATPLOTLIB_AVAILABLE or fig is None:
+        return None
     """Convertit une figure Matplotlib en image ReportLab sans fichier temporaire."""
     bio = BytesIO()
     fig.savefig(bio, format="png", dpi=160, bbox_inches="tight", facecolor="white")
@@ -400,6 +425,8 @@ def _pdf_mpl_image(fig, Image, width_cm=17.4, height_cm=None):
 
 
 def generate_executive_value_chart(dea, colors=None):
+    if not MATPLOTLIB_AVAILABLE:
+        return None
     """Génère la barre « situation actuelle / gisement capturable ».
 
     Le gisement est prioritairement la somme des slacks GOP disponibles ; à défaut,
@@ -449,6 +476,8 @@ def generate_executive_value_chart(dea, colors=None):
 
 
 def generate_actionable_category_chart(dea, colors=None):
+    if not MATPLOTLIB_AVAILABLE:
+        return None
     """Génère la répartition dynamique des hôtels par catégorie actionnable."""
     labels = [("Star", "Q1"), ("Sous-performant à potentiel", "Q3"),
               ("Sous-échelle", "Q2"), ("À arbitrer", "Q4")]
@@ -465,6 +494,8 @@ def generate_actionable_category_chart(dea, colors=None):
 
 
 def generate_capex_roi_chart(dea, cap_input=None, colors=None):
+    if not MATPLOTLIB_AVAILABLE:
+        return None
     """Classe les 10 meilleurs hôtels par ROI marginal attendu / euro de CAPEX."""
     rows = []
     try:
@@ -702,7 +733,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
         "imputable à une taille inadaptée au marché.", meth_s))
 
     avg_bcc   = sum(dea.bcc_scores.values()) / len(dea.bcc_scores)
-    n_eff     = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
+    n_eff     = sum(1 for s in dea.bcc_scores.values() if _est_efficient(s))
     n_crit    = sum(1 for s in dea.bcc_scores.values() if s < _TH['crit'])
     avg_scale = sum(dea.scale_efficiency.values()) / len(dea.scale_efficiency)
     _pct_eff  = n_eff / dea.n
@@ -752,7 +783,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
     # ══════════════════ SYNTHÈSE EXÉCUTIVE ══════════════════
     story.append(Paragraph("Synthèse exécutive — gisement de valeur", h1_s))
     story.append(Paragraph("Le graphique ci-dessous rapproche la base GOP observée du potentiel additionnel capturable, calculé exclusivement à partir des données et slacks disponibles.", body_s))
-    story.append(_pdf_mpl_image(generate_executive_value_chart(dea, {"navy": "#1a3a5c", "green": "#1e8449"}), Image))
+    _chart = _pdf_mpl_image(generate_executive_value_chart(dea, {"navy": "#1a3a5c", "green": "#1e8449"}), Image)
+    if _chart is not None: story.append(_chart)
 
     # ══════════════════ QUADRANTS ══════════════════
     story.append(Paragraph("2. Quadrants — gestion pure x efficacité d'échelle", h1_s))
@@ -798,7 +830,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
 
     story.append(Paragraph("Catégorisation actionnable des hôtels", h1_s))
     story.append(Paragraph("Répartition des actifs selon les quatre catégories opérationnelles issues des quadrants existants ; les seuils de quadrants ne sont pas modifiés.", body_s))
-    story.append(_pdf_mpl_image(generate_actionable_category_chart(dea), Image))
+    _chart = _pdf_mpl_image(generate_actionable_category_chart(dea), Image)
+    if _chart is not None: story.append(_chart)
 
     story.append(PageBreak())
 
@@ -835,7 +868,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
         for _, r in se_df.iterrows():
             _se  = r['Super-Efficience']
             _bccv = dea.bcc_scores.get(r['Hôtel'], 0)
-            if isinstance(_se, (int, float)) and _bccv >= 0.999:
+            if isinstance(_se, (int, float)) and _est_efficient(_bccv):
                 _lec = ("Avantage robuste — marge de sécurité"
                         if _se >= 1.15 else
                         "Efficient mais fragile — seul sur son segment")
@@ -860,7 +893,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
         else:
             _fr = [r for _, r in se_df.iterrows()
                    if isinstance(r['Super-Efficience'], (int, float))
-                   and dea.bcc_scores.get(r['Hôtel'], 0) >= 0.999
+                   and _est_efficient(dea.bcc_scores.get(r['Hôtel'], 0))
                    and r['Super-Efficience'] < 1.05]
             story.append(_lecture(
                 (f"Aucun actif ne dépasse 1,5 : les références du portefeuille ont des "
@@ -1353,7 +1386,8 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
 
         story.append(Paragraph("Lien CAPEX → retour attendu", h2_s))
         story.append(Paragraph("Classement des meilleurs candidats selon le ROI marginal attendu par euro de CAPEX ; les trois premiers sont mis en évidence.", body_s))
-        story.append(_pdf_mpl_image(generate_capex_roi_chart(dea, cap_input), Image))
+        _chart = _pdf_mpl_image(generate_capex_roi_chart(dea, cap_input), Image)
+        if _chart is not None: story.append(_chart)
 
         _gv = [r['goppam'] for r in cap_rows_pdf if r['goppam']]
         _mv = [r['marge']  for r in cap_rows_pdf if r['marge']]
@@ -2071,8 +2105,9 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("📐 Seuils Quadrants")
-    bcc_threshold   = st.slider("Seuil BCC efficience",   0.70, 0.99, 0.90, 0.01)
-    scale_threshold = st.slider("Seuil Scale Efficiency", 0.70, 0.99, 0.90, 0.01)
+    bcc_threshold = SEUIL_EFFICIENCE
+    scale_threshold = SEUIL_EFFICIENCE
+    st.caption(f"Seuil quadrants harmonisé : {SEUIL_EFFICIENCE:.0%} (tolérance ±{TOLERANCE_EFFICIENCE:g})")
 
     # ── Seuils de lecture du rapport ─────────────────────────────────────────
     # Les valeurs par défaut sont des conventions sectorielles hôtellerie.
@@ -2783,7 +2818,7 @@ if any(not hasattr(dea, attr) for attr in _v31_attrs):
 #  KPIs globaux
 # ─────────────────────────────────────────────
 avg_bcc      = np.mean(list(dea.bcc_scores.values()))
-n_efficient  = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
+n_efficient  = sum(1 for s in dea.bcc_scores.values() if _est_efficient(s))
 n_critical   = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
 avg_scale    = np.mean(list(dea.scale_efficiency.values()))
 
@@ -2827,7 +2862,7 @@ with tab_board:
 
     # ── KPI Cards ────────────────────────────────────────────────────────────
     _avg_bcc   = np.mean(list(dea.bcc_scores.values()))
-    _n_eff     = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
+    _n_eff     = sum(1 for s in dea.bcc_scores.values() if _est_efficient(s))
     _n_crit    = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
     _avg_scale = np.mean(list(dea.scale_efficiency.values()))
     _best_tp   = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
@@ -2902,7 +2937,7 @@ with tab_board:
     for _h in dea.hotels:
         _q = dea.quadrants.get(_h, 'Q4'); _qc[_q] = _qc.get(_q, 0) + 1
     _q1, _q2, _q3, _q4 = _qc.get('Q1',0), _qc.get('Q2',0), _qc.get('Q3',0), _qc.get('Q4',0)
-    if _avg_bcc >= 0.90 and _q1 >= dea.n * 0.6:
+    if _avg_bcc >= SEUIL_EFFICIENCE - TOLERANCE_EFFICIENCE and _q1 >= dea.n * 0.6:
         _vrd = "✅ Portefeuille mature — efficience élevée. Stratégie de rétention et benchmarking opérationnel."
         _vc  = "#1e8449"
     elif _q3 >= dea.n * 0.4:
@@ -2955,7 +2990,7 @@ with tab_board:
     with _tc1:
         st.markdown('<p class="section-title">🏆 Top 3 — Leaders TOPSIS</p>', unsafe_allow_html=True)
         for _i, _h in enumerate(sorted(dea.hotels, key=lambda h: dea.topsis_ranks[h])[:3], 1):
-            _bcc_h = dea.bcc_scores[_h]; _c = '#1e8449' if _bcc_h >= 0.90 else '#f39c12'
+            _bcc_h = dea.bcc_scores[_h]; _c = '#1e8449' if _est_efficient(_bcc_h) else '#f39c12'
             st.markdown(
                 f"<div style='padding:8px 12px;background:#f8f9fa;border-left:3px solid {_c};"
                 f"border-radius:0 4px 4px 0;margin-bottom:6px;'>"
@@ -3124,7 +3159,7 @@ with tab_kpi:
     st.markdown('<p class="section-title">Distribution des scores d\'efficacité</p>', unsafe_allow_html=True)
 
     # ── Signal benchmark % hôtels efficients (Poldrugovac et al. 2016 ; papier Via@ 2013) ──
-    _n_eff_t2  = sum(1 for s in dea.bcc_scores.values() if s >= 0.999)
+    _n_eff_t2  = sum(1 for s in dea.bcc_scores.values() if _est_efficient(s))
     _pct_eff   = _n_eff_t2 / dea.n
 
     if _pct_eff < 0.12:
@@ -3222,7 +3257,7 @@ with tab_kpi:
             _score = _r.get('score')
             _bcc   = dea.bcc_scores.get(h, 0)
             _delta = round(_score - _bcc, 4) if _score is not None else None
-            _label = ('✅ SBM-efficient' if _score is not None and _score >= 0.999
+            _label = ('✅ SBM-efficient' if _score is not None and _est_efficient(_score)
                       else '🟡 Inefficience modérée' if _score is not None and _score >= 0.80
                       else '🔴 Inefficience forte' if _score is not None else '⚠️ Non résolu')
             _dom = _sbm_dominant_analysis(_r, dea, h) if _r.get('feasible') else {}
@@ -3444,10 +3479,10 @@ Cela interdit d'annuler la satisfaction pour atteindre BCC = 1 artificiellement.
                 "Rang SE"          : f"#{int(_se_d.loc[h, 'Rang SE'])}" if h in _se_d.index else "—",
                 "Verdict"          : (
                     "🟢 Leader confirmé"
-                    if dea.bcc_scores[h] >= 0.90
+                    if _est_efficient(dea.bcc_scores[h])
                     and (float(_ce_d.loc[h,"Cross-Efficience"]) if h in _ce_d.index else 0) >= 0.80
                     else "🟡 Efficient fragile"
-                    if dea.bcc_scores[h] >= 0.90
+                    if _est_efficient(dea.bcc_scores[h])
                     else "🔴 Plan d'action requis"
                 ),
             })
@@ -3763,7 +3798,7 @@ with tab_slacks:
     input_names  = dea.input_cols
     output_names = ['revpar', 'satisfaction', 'taux_occupation']
     _input_labels = {'nb_chambres': 'Chambres', 'nb_employes': 'Employés', 'couts_op_ex': 'Coûts Op.'}
-    hotels_inefficient = [h for h in dea.hotels if dea.bcc_scores[h] < 0.999]
+    hotels_inefficient = [h for h in dea.hotels if not _est_efficient(dea.bcc_scores[h])]
 
     if not hotels_inefficient:
         st.success("✅ Tous les hôtels sont sur la frontière d'efficacité — aucun gaspillage détecté.")
@@ -4013,7 +4048,7 @@ with tab_fiche:
                 st.success(f"✅ BCC et SBM convergent (écart {_gap:.4f}) — résultat robuste.")
 
         # ── Analyse automatique — Levier dominant ───────────────────────────
-        if _sbm_hotel.get('feasible') and _sbm_score is not None and _sbm_score < 0.999:
+        if _sbm_hotel.get('feasible') and _sbm_score is not None and not _est_efficient(_sbm_score):
             _dom = _sbm_dominant_analysis(_sbm_hotel, dea, selected)
             st.markdown("---")
             st.markdown("**🎯 Levier prioritaire identifié par SBM**")
@@ -4408,7 +4443,7 @@ with tab_fiche:
 
             # Interprétation automatique
             st.markdown("")
-            if _bcc_new >= 0.999:
+            if _est_efficient(_bcc_new):
                 st.success(f"✅ **Sur la frontière d'efficience** — avec ces paramètres, {selected} atteint 100% BCC. Ce scénario est un objectif de référence réaliste.")
             elif _bcc_new > _bcc_old + 0.05:
                 st.info(f"📈 **Gain significatif** (+{_delta:.1%}) — ce scénario améliore substantiellement l'efficience. Vérifiez la faisabilité opérationnelle des changements.")
@@ -5292,6 +5327,12 @@ with tab_capital:
             # cela créerait des données non fournies par l'utilisateur.
             base_revpar_ft, base_gop_pct_ft = None, None
 
+        # Normalisation défensive des valeurs scalaires de baseline avant comparaison/calcul.
+        base_revpar_ft = pd.to_numeric(base_revpar_ft, errors='coerce')
+        base_revpar_ft = 0.0 if pd.isna(base_revpar_ft) else float(base_revpar_ft)
+        base_gop_pct_ft = pd.to_numeric(base_gop_pct_ft, errors='coerce')
+        base_gop_pct_ft = 0.0 if pd.isna(base_gop_pct_ft) else float(base_gop_pct_ft)
+
         flex_rows = []
         if not dea.has_chambres:
             st.info("Flow Through par hôtel non calculable — nombre de chambres réel non fourni.")
@@ -5299,20 +5340,29 @@ with tab_capital:
           for r in cap_rows:
             hotel_ft = r['Hôtel']
             stars_ft = int(cap_input.loc[hotel_ft, 'classement (★)']) if 'classement (★)' in cap_input.columns and hotel_ft in cap_input.index else 3
-            ft_bench_ft = ft_pct
-            lits_ft  = float(dea.df.loc[hotel_ft, 'nb_chambres'])
-            revpar_ft = float(dea.df.loc[hotel_ft, 'revpar'])
+            stars_ft = pd.to_numeric(stars_ft, errors='coerce')
+            stars_ft = 0 if pd.isna(stars_ft) else int(stars_ft)
+            ft_bench_ft = pd.to_numeric(ft_pct, errors='coerce')
+            ft_bench_ft = 0.0 if pd.isna(ft_bench_ft) else float(ft_bench_ft)
+            lits_ft = pd.to_numeric(dea.df.loc[hotel_ft, 'nb_chambres'], errors='coerce')
+            lits_ft = 0.0 if pd.isna(lits_ft) else float(lits_ft)
+            revpar_ft = pd.to_numeric(dea.df.loc[hotel_ft, 'revpar'], errors='coerce')
+            revpar_ft = 0.0 if pd.isna(revpar_ft) else float(revpar_ft)
             # CA = RevPAR × lits × jours (RevPAR intègre déjà l'occupation)
             ca_ft    = revpar_ft * lits_ft * jours_exploit
 
-            gop_h_ft = (float(cap_input.loc[hotel_ft, 'gop (k€)']) * 1000
-                        if 'gop (k€)' in cap_input.columns
-                        and float(cap_input.loc[hotel_ft, 'gop (k€)']) > 0 else None)
+            _gop_h_ft_raw = (pd.to_numeric(cap_input.loc[hotel_ft, 'gop (k€)'], errors='coerce')
+                              if 'gop (k€)' in cap_input.columns else 0.0)
+            _gop_h_ft_raw = 0.0 if pd.isna(_gop_h_ft_raw) else float(_gop_h_ft_raw)
+            gop_h_ft = (_gop_h_ft_raw * 1000
+                        if 'gop (k€)' in cap_input.columns and _gop_h_ft_raw > 0 else None)
 
             ca_base_ft = gop_base_ft = None
             if _n1_mode:
-                _rv1 = float(dea.df.loc[hotel_ft, 'revpar_n1'] or 0)
-                _gp1 = float(dea.df.loc[hotel_ft, 'gop_n1']    or 0)
+                _rv1 = pd.to_numeric(dea.df.loc[hotel_ft, 'revpar_n1'], errors='coerce')
+                _rv1 = 0.0 if pd.isna(_rv1) else float(_rv1)
+                _gp1 = pd.to_numeric(dea.df.loc[hotel_ft, 'gop_n1'], errors='coerce')
+                _gp1 = 0.0 if pd.isna(_gp1) else float(_gp1)
                 if _rv1 > 0 and _gp1 > 0:
                     ca_base_ft  = _rv1 * lits_ft * jours_exploit
                     gop_base_ft = _gp1 * 1000          # k€ → €
@@ -5330,8 +5380,13 @@ with tab_capital:
                     ft_val = ft_bench_ft; flex_val = None; src = 'Benchmark'
             else:
                 ft_val = ft_bench_ft; flex_val = None; src = 'Benchmark'
+
+            ft_val = pd.to_numeric(ft_val, errors='coerce')
+            ft_val = 0.0 if pd.isna(ft_val) else float(ft_val)
     
             slack_r_ft = dea.slacks.get(hotel_ft, {}).get('outputs', {}).get('revpar', 0)
+            slack_r_ft = pd.to_numeric(slack_r_ft, errors='coerce')
+            slack_r_ft = 0.0 if pd.isna(slack_r_ft) else float(slack_r_ft)
             driver_ft = 'Rate-driven' if slack_r_ft > 0 else 'Volume-driven'
             if isinstance(ft_val, float):
                 if ft_val >= 0.60: ftq = '✅ Excellent'
