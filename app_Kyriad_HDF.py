@@ -1365,7 +1365,9 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
         "L'efficience opérationnelle ignore le capital immobilisé. Un hôtel peut être "
         "parfaitement géré au quotidien tout en détruisant de la valeur si son actif est "
         "surdimensionné ou sur-capitalisé. Le GOPPAM (GOP par m² disponible) et le "
-        "CAPEX par chambre rapportent la performance à la base d'actifs.", meth_s))
+        "CAPEX par chambre rapportent la performance à la base d'actifs. Le CAPEX retenu est annuel : "
+        "il correspond à la réserve de renouvellement FF&E (mobilier, équipements), hors rénovation lourde "
+        "et hors PIP exceptionnel.", meth_s))
 
     def _cap_ok(t):
         try:
@@ -1449,7 +1451,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
         # ne doit être remplacée par une succession de « — » dans le PDF.
         _cap_specs = [
             ('goppam', "GOPPAM (€/m²)", lambda v: f"{v:.0f}"),
-            ('capexch', "CAPEX/chambre (k€)", lambda v: f"{v:.2f}"),
+            ('capexch', "CAPEX FF&E/ch. (k€/an)", lambda v: f"{v:.2f}"),
             ('rend', "Rend. CAPEX (x)", lambda v: f"{v:.1f}"),
             ('marge', "Marge GOP", lambda v: f"{v:.1f}%"),
         ]
