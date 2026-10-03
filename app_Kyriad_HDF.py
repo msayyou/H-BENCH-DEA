@@ -46,6 +46,8 @@ SEUIL_CRITIQUE = 0.85
 # Module Capital : filtrer les hôtels sans CAPEX renseigné
 CAPITAL_EXCLUDE_MISSING_CAPEX = True
 CAPITAL_MISSING_CAPEX_LABEL = "CAPEX non renseigné"
+# Rapport PDF : graphique « potentiel GOP / CAPEX » (section 9). False = section 9 limitée au tableau.
+PDF_SHOW_CAPEX_CHART = True
 
 
 def _capex_missing_mask(df, capex_col):
@@ -529,8 +531,11 @@ def generate_executive_value_chart(dea, colors=None):
                 slack = dea.slacks.get(h, {}).get("outputs", {}).get("gop (k€)", 0) or 0
             if slack: upside += float(slack) / (1000.0 if gop_col == "gop" else 1.0)
         if upside <= 0 and current > 0:
-            upside = sum(current / max(float(dea.bcc_scores.get(h, 1)), 1e-6)
-                         for h in dea.hotels) - current
+            # Estimation indicative hôtel par hôtel : GOP_h × (1/BCC_h − 1).
+            # (Ne jamais sommer le GOP total du portefeuille par hôtel : erreur ×n.)
+            _g = vals / (1000.0 if gop_col == "gop" else 1.0)
+            upside = sum(float(_g.get(h, 0.0)) * (1.0 / max(float(dea.bcc_scores.get(h, 1)), 1e-6) - 1.0)
+                         for h in dea.hotels)
             upside = max(0.0, upside)
     except Exception:
         current, upside = 0.0, 0.0
@@ -575,7 +580,7 @@ def generate_actionable_category_chart(dea, colors=None):
 def generate_capex_roi_chart(dea, cap_input=None, colors=None):
     if not MATPLOTLIB_AVAILABLE:
         return None
-    """Classe les 10 meilleurs hôtels par ROI marginal attendu / euro de CAPEX."""
+    """Classe les 10 meilleurs hôtels par potentiel GOP additionnel rapporté au CAPEX annuel (indicatif, pas un ROI)."""
     rows = []
     try:
         for h in dea.hotels:
@@ -589,7 +594,7 @@ def generate_capex_roi_chart(dea, cap_input=None, colors=None):
                 if extra: break
             extra = extra / 1000.0 if key == "gop" else extra
             if extra <= 0: extra = max(0.0, gop * (1.0 / bcc - 1.0))
-            if cap > 0 and extra > 0: rows.append((h, 1000.0 * extra / cap))
+            if cap > 0 and extra > 0: rows.append((h, 100.0 * extra / cap))   # extra et cap en k€ → %
     except Exception:
         rows = []
     rows = sorted(rows, key=lambda x: x[1], reverse=True)[:10]
@@ -598,11 +603,11 @@ def generate_capex_roi_chart(dea, cap_input=None, colors=None):
         names = [str(h)[:24] for h, _ in rows][::-1]; vals = [v for _, v in rows][::-1]
         bars = ax.barh(names, vals, color=["#1e8449" if i >= len(vals)-3 else "#2e6da4" for i in range(len(vals))])
         ax.bar_label(bars, labels=[f"{v:.1f}%" for v in vals], padding=3, fontsize=7)
-        ax.set_xlim(0, max(vals) * 1.18); ax.set_xlabel("ROI marginal attendu (% / an)", fontsize=8)
+        ax.set_xlim(0, max(vals) * 1.18); ax.set_xlabel("Potentiel GOP additionnel / CAPEX annuel (%) — indicatif", fontsize=8)
     else:
         ax.text(.5, .5, "CAPEX et GOP nécessaires pour classer les candidats", ha="center", va="center", transform=ax.transAxes, fontsize=9)
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
-    ax.set_title("CAPEX → retour attendu — top 10 des candidats", color="#1a3a5c", fontsize=10, fontweight="bold", pad=10)
+    ax.set_title("Potentiel GOP rapporté au CAPEX — top 10 (indicatif)", color="#1a3a5c", fontsize=10, fontweight="bold", pad=10)
     ax.tick_params(axis="y", labelsize=7); ax.spines[["top", "right"]].set_visible(False); ax.grid(axis="x", alpha=.18)
     fig.tight_layout(); return fig
 
@@ -1360,7 +1365,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
         "L'efficience opérationnelle ignore le capital immobilisé. Un hôtel peut être "
         "parfaitement géré au quotidien tout en détruisant de la valeur si son actif est "
         "surdimensionné ou sur-capitalisé. Le GOPPAM (GOP par m² disponible) et le "
-        "rendement CAPEX rapportent la performance à la base d'actifs.", meth_s))
+        "CAPEX par chambre rapportent la performance à la base d'actifs.", meth_s))
 
     def _cap_ok(t):
         try:
@@ -1463,10 +1468,14 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
             story.append(Paragraph(
                 "Module non activé – données CAPEX / GOP requises.", body_s))
 
-        story.append(Paragraph("Lien CAPEX → retour attendu", h2_s))
-        story.append(Paragraph("Classement des meilleurs candidats selon le ROI marginal attendu par euro de CAPEX ; les trois premiers sont mis en évidence.", body_s))
-        _chart = _pdf_mpl_image(generate_capex_roi_chart(dea, cap_input), Image)
-        if _chart is not None: story.append(_chart)
+        if PDF_SHOW_CAPEX_CHART:
+            story.append(Paragraph("Potentiel GOP rapporté au CAPEX", h2_s))
+            story.append(Paragraph(
+                "Classement indicatif : écart d'efficience converti en GOP additionnel, rapporté au CAPEX annuel. "
+                "Ce n'est pas un rendement de l'investissement — ce potentiel provient de l'exploitation, pas du CAPEX — "
+                "mais un repère pour hiérarchiser les actifs à examiner.", body_s))
+            _chart = _pdf_mpl_image(generate_capex_roi_chart(dea, cap_input), Image)
+            if _chart is not None: story.append(_chart)
 
         _gv = [r['goppam'] for r in cap_rows_pdf if r['goppam']]
         _mv = [r['marge']  for r in cap_rows_pdf if r['marge']]
