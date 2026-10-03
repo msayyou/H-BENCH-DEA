@@ -35,7 +35,85 @@ def _score_fraction(value):
 
 def _est_efficient(value):
     return _score_fraction(value) >= SEUIL_EFFICIENCE - TOLERANCE_EFFICIENCE
+
+# ── Constantes centrales (source unique — ne jamais redéfinir ces valeurs en dur) ──
+# Flow through GOP/ΔCA appliqué par défaut (curseur de la sidebar) : 45 % = benchmark
+# Europe, hôtellerie urbaine. Valeur historique de l'app ; le curseur reste réglable 20–80 %.
+FLOW_THROUGH_DEFAULT = 0.45
+# Seuil BCC sous lequel un actif est dit « critique » (≠ flow through).
+SEUIL_CRITIQUE = 0.85
+
+# Module Capital : filtrer les hôtels sans CAPEX renseigné
+CAPITAL_EXCLUDE_MISSING_CAPEX = True
+CAPITAL_MISSING_CAPEX_LABEL = "CAPEX non renseigné"
+
+
+def _capex_missing_mask(df, capex_col):
+    """True pour les hôtels dont le CAPEX est absent (NaN) ou nul. Aucun fillna(0)."""
+    if capex_col not in df.columns:
+        return pd.Series(True, index=df.index)
+    s = pd.to_numeric(df[capex_col], errors="coerce")
+    return s.isna() | (s == 0)
+
+
+def select_inefficient_units_input_oriented(df, criteria, thresholds, n_units):
+    """
+    Sélection input-oriented (plan de restructuration).
+    Un hôtel sans CAPEX renseigné n'est PAS classé inefficace :
+    il est exclu et annoté, pas traité comme CAPEX = 0.
+    Retourne (hôtels inefficaces retenus, df annoté avec `_capex_missing` / `_selection_reason`).
+    """
+    capex_col = criteria.get("capex_col", "Capex")
+    df = df.copy()
+    if CAPITAL_EXCLUDE_MISSING_CAPEX:
+        df["_capex_missing"] = _capex_missing_mask(df, capex_col)
+    else:
+        df["_capex_missing"] = False
+
+    eligible = df[~df["_capex_missing"]].copy()
+    df["_selection_reason"] = None
+    df.loc[df["_capex_missing"], "_selection_reason"] = CAPITAL_MISSING_CAPEX_LABEL
+
+    inefficient = []
+    for idx, row in eligible.iterrows():
+        for crit_col, direction in criteria["columns"].items():
+            val = row.get(crit_col)
+            if pd.isna(val):
+                continue
+            thr = thresholds.get(crit_col)
+            if thr is None:
+                continue
+            if direction == "higher_is_worse" and val > thr:
+                inefficient.append(idx)
+                df.loc[idx, "_selection_reason"] = f"{crit_col} > {thr}"
+                break
+            if direction == "lower_is_worse" and val < thr:
+                inefficient.append(idx)
+                df.loc[idx, "_selection_reason"] = f"{crit_col} < {thr}"
+                break
+
+    inefficient = list(dict.fromkeys(inefficient))[:n_units]
+    return df.loc[inefficient], df
+
+
+def run_capital_dea_excluding_missing_capex(dea, cap_df):
+    """compute_capital_dea() sur les seuls hôtels dont le CAPEX est renseigné (> 0).
+    Un CAPEX nul fausserait la frontière (input nul → unité dominante). Retourne (résultat, exclus)."""
+    capex = (pd.to_numeric(cap_df["capex_annuel"], errors="coerce")
+             if "capex_annuel" in cap_df.columns else pd.Series(np.nan, index=cap_df.index))
+    excluded = [h for h in dea.hotels
+                if CAPITAL_EXCLUDE_MISSING_CAPEX and (pd.isna(capex.get(h)) or capex.get(h) == 0)]
+    keep = [h for h in dea.hotels if h not in excluded]
+    if len(keep) < 3:                       # DEA : minimum 3 unités
+        return None, excluded
+    _h, _n, _d = dea.hotels, dea.n, dea.df
+    try:
+        dea.hotels, dea.n, dea.df = keep, len(keep), cap_df.loc[keep]
+        return dea.compute_capital_dea(), excluded
+    finally:
+        dea.hotels, dea.n, dea.df = _h, _n, _d
 from datetime import datetime
+import inspect
 import warnings
 import re
 import requests
@@ -532,7 +610,7 @@ def generate_capex_roi_chart(dea, cap_input=None, colors=None):
 def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
                                   cap_input=None, sw_results=None,
                                   jours_exploit: int = 365,
-                                  ft_pct: float = 0.50,
+                                  ft_pct: float = FLOW_THROUGH_DEFAULT,
                                   avg_salary: float = 35_000,
                                   portfolio_name: str = "",
                                   thresholds: dict = None,
@@ -556,7 +634,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
 
     # Seuils d'interprétation — conventions sectorielles par défaut,
     # recalibrables depuis la barre latérale de l'application
-    _TH = {'crit': 0.85, 'ft_norm': 0.50, 'ft_low': 0.40, 'sbm': 0.15,
+    _TH = {'crit': SEUIL_CRITIQUE, 'ft_norm': 0.50, 'ft_low': 0.40, 'sbm': 0.15,
            'tgr': 0.15, 'goppam': 2.5, 'rgi': 100}
     if thresholds:
         _TH.update({k: v for k, v in thresholds.items() if v is not None})
@@ -1355,7 +1433,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
             cap_rows_pdf.append({
                 'h': h,
                 'goppam' : gop * 1000 / surf if surf > 0 else None,
-                'capexch': (capex / lits) if (lits and lits > 0) else None,
+                'capexch': (capex / lits) if (lits and lits > 0 and capex > 0) else None,
                 'rend'   : (ca / capex) if (ca is not None and capex > 0) else None,
                 'marge'  : (gop / ca * 100) if (ca is not None and ca > 0) else None,
                 'bcc'    : dea.bcc_scores.get(h, 0),
@@ -1448,7 +1526,7 @@ def generate_portfolio_report_pdf(dea, quadrant_labels: dict, top_n: int = None,
                     _tmp.loc[h, 'capex_annuel'] = float(pd.to_numeric(cap_input.loc[h, 'capex_annuel (k€)'], errors='coerce') or 0) * 1000.0
                     _tmp.loc[h, 'gop']          = float(pd.to_numeric(cap_input.loc[h, 'gop (k€)'], errors='coerce') or 0) * 1000.0
             dea.df = _tmp
-            cdea = dea.compute_capital_dea()
+            cdea, _pdf_excluded = run_capital_dea_excluding_missing_capex(dea, _tmp)
             dea.df = _bk
 
             if cdea is not None and not cdea.empty:
@@ -2091,7 +2169,7 @@ with st.sidebar:
 
     _ft_int = st.slider(
         "Flow Through % (GOP/ΔRevenu)",
-        min_value=20, max_value=80, value=45, step=1,
+        min_value=20, max_value=80, value=int(round(FLOW_THROUGH_DEFAULT * 100)), step=1,
         format="%d%%",
         help="Part du revenu marginal convertie en GOP. Benchmark Europe : hôtellerie urbaine ~45%. "
              "Appliquer la même valeur pour tous les actifs du compset."
@@ -2119,7 +2197,7 @@ with st.sidebar:
             "Ces seuils déclenchent les commentaires « lecture investisseur » du "
             "rapport PDF. Ils ne modifient aucun calcul d'efficience."
         )
-        _th_crit   = st.slider("Actif critique — BCC sous", 0.60, 0.95, 0.85, 0.01,
+        _th_crit   = st.slider("Actif critique — BCC sous", 0.60, 0.95, SEUIL_CRITIQUE, 0.01,
                                key='th_crit',
                                help="En dessous de ce score, l'actif entre dans le plan d'action prioritaire.")
         _th_ft     = st.slider("Flow Through — norme sectorielle", 0.30, 0.70, 0.50, 0.05,
@@ -2186,6 +2264,7 @@ with st.sidebar:
                                else "📤 Output-Oriented (plan croissance)",
         help="Input : 'De combien réduire les ressources ?' / Output : 'De combien augmenter les revenus ?' (Barros, 2005)",
     )
+    orientation_mode = orientation   # 'input' | 'output' — propagé à run_multi_module
 
     st.markdown("---")
     with st.expander("⚖️ Poids TOPSIS (Cornell methodology)", expanded=False):
@@ -2800,13 +2879,21 @@ if st.button("🚀 LANCER L'ANALYSE DEA COMPLÈTE", type="primary", use_containe
     if _active:
         with st.spinner(f"Calcul Multi-Module DEA ({len(_active)} modules actifs)…"):
             _overrides = st.session_state.get("variable_overrides_mm", {})
-            _module_results = run_multi_module(
+            _rmm_kwargs = dict(
                 df=_df_mm,
                 dmu_col="hotel_name",
                 active_modules=_active,
                 variable_overrides=_overrides if _overrides else None,
                 proxy_cols=_proxy_cols,
             )
+            _rmm_params = inspect.signature(run_multi_module).parameters
+            if 'orientation_mode' in _rmm_params or any(
+                    p.kind is inspect.Parameter.VAR_KEYWORD for p in _rmm_params.values()):
+                _rmm_kwargs['orientation_mode'] = orientation_mode
+            else:
+                st.warning("⚠️ `run_multi_module` (dea_model.py) n'accepte pas encore `orientation_mode` : "
+                           "les modules multi-dim, dont Capital, gardent leur orientation par défaut.")
+            _module_results = run_multi_module(**_rmm_kwargs)
             st.session_state["module_results"] = _module_results
         _ok = sum(1 for r in _module_results.values() if not r.error and not r.scores.empty)
         st.success(f"✅ Analyse terminée ! ({_ok}/{len(_active)} modules multi-dim OK)")
@@ -2843,7 +2930,7 @@ if any(not hasattr(dea, attr) for attr in _v31_attrs):
 # ─────────────────────────────────────────────
 avg_bcc      = np.mean(list(dea.bcc_scores.values()))
 n_efficient  = sum(1 for s in dea.bcc_scores.values() if _est_efficient(s))
-n_critical   = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
+n_critical   = sum(1 for s in dea.bcc_scores.values() if s < SEUIL_CRITIQUE)
 avg_scale    = np.mean(list(dea.scale_efficiency.values()))
 
 best_topsis = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
@@ -2887,14 +2974,14 @@ with tab_board:
     # ── KPI Cards ────────────────────────────────────────────────────────────
     _avg_bcc   = np.mean(list(dea.bcc_scores.values()))
     _n_eff     = sum(1 for s in dea.bcc_scores.values() if _est_efficient(s))
-    _n_crit    = sum(1 for s in dea.bcc_scores.values() if s < 0.85)
+    _n_crit    = sum(1 for s in dea.bcc_scores.values() if s < SEUIL_CRITIQUE)
     _avg_scale = np.mean(list(dea.scale_efficiency.values()))
     _best_tp   = min(dea.topsis_ranks, key=dea.topsis_ranks.get)
     _kc1, _kc2, _kc3, _kc4, _kc5 = st.columns(5)
-    _kc1.metric("📊 BCC moyen",        f"{_avg_bcc:.1%}", delta=f"{_avg_bcc-0.85:+.1%} vs seuil 85%")
+    _kc1.metric("📊 BCC moyen",        f"{_avg_bcc:.1%}", delta=f"{_avg_bcc-SEUIL_CRITIQUE:+.1%} vs seuil {SEUIL_CRITIQUE:.0%}")
     _kc2.metric("🏆 Hôtels efficaces", f"{_n_eff}/{dea.n}", delta=f"{_n_eff/dea.n:.0%}", delta_color="off")
     _kc3.metric("⚙️ Scale Eff. moy.", f"{_avg_scale:.1%}")
-    _kc4.metric("🔴 Critiques <85%",  _n_crit, delta=f"{_n_crit/dea.n:.0%}", delta_color="inverse")
+    _kc4.metric(f"🔴 Critiques <{SEUIL_CRITIQUE:.0%}",  _n_crit, delta=f"{_n_crit/dea.n:.0%}", delta_color="inverse")
     _kc5.metric("🥇 Leader TOPSIS",   (_best_tp[:18] if len(_best_tp) > 18 else _best_tp))
 
     # ── Upside financier total ───────────────────────────────────────────────
@@ -3237,7 +3324,7 @@ with tab_kpi:
         # NB : ne pas nommer cette variable `colors` — elle écraserait
         # reportlab.lib.colors au niveau module et casserait le rapport PDF
         _bar_colors_bcc = ['#27ae60' if dea.bcc_scores[h] >= 0.95
-                           else '#f39c12' if dea.bcc_scores[h] >= 0.85 else '#e74c3c'
+                           else '#f39c12' if dea.bcc_scores[h] >= SEUIL_CRITIQUE else '#e74c3c'
                            for h in sorted_hotels]
         fig_bars = go.Figure(go.Bar(
             x=[dea.bcc_scores[h] for h in sorted_hotels], y=sorted_hotels,
@@ -3389,7 +3476,7 @@ with tab_topsis:
                 "#1a8a4a" if v >= 1.5 else
                 "#27ae60" if v >= 1.1 else
                 "#f1c40f" if v >= 1.0 else
-                "#f39c12" if v >= 0.85 else "#e74c3c"
+                "#f39c12" if v >= SEUIL_CRITIQUE else "#e74c3c"
                 for v in _se_num["_se_val"]
             ]
             fig_se = go.Figure(go.Bar(
@@ -4795,7 +4882,7 @@ with tab_capital:
     for hotel in dea.hotels:
         row = {
             'surface_m2'        : float(dea.df.loc[hotel, 'surface_m2'])        if (getattr(dea,'has_surface',False) and 'surface_m2'         in dea.df.columns) else 0.0,
-            'capex_annuel (k€)' : float(dea.df.loc[hotel, 'capex_annuel']) / _capex_div      if (getattr(dea,'has_capex',  False) and 'capex_annuel'         in dea.df.columns) else 0.0,
+            'capex_annuel (k€)' : float(dea.df.loc[hotel, 'capex_annuel']) / _capex_div      if (getattr(dea,'has_capex',  False) and 'capex_annuel'         in dea.df.columns) else np.nan,
             'gop (k€)'          : float(dea.df.loc[hotel, 'gop']) / _gop_div               if (getattr(dea,'has_gop',    False) and 'gop'                  in dea.df.columns) else 0.0,
             'classement (★)'    : int(dea.df.loc[hotel, 'classement_etoiles'])  if (getattr(dea,'has_stars',  False) and 'classement_etoiles'   in dea.df.columns) else 3,
         }
@@ -4905,7 +4992,9 @@ with tab_capital:
                     else:
                         _new = st.session_state['capital_input'].copy()
                         for _c in _need:
-                            _vals = pd.to_numeric(_up.loc[_matched, _c], errors='coerce').fillna(0)
+                            _vals = pd.to_numeric(_up.loc[_matched, _c], errors='coerce')
+                            if _c != 'capex_annuel (k€)':      # CAPEX vide = non renseigné, jamais 0
+                                _vals = _vals.fillna(0)
                             _new.loc[_matched, _c] = _vals.values
                         _new['classement (★)'] = (_new['classement (★)']
                                                   .clip(1, 5).round().astype(int))
@@ -4941,8 +5030,10 @@ with tab_capital:
     )
     # data_editor renvoie un DataFrame indépendant : copie explicite pour COW.
     cap_input = cap_input.copy()
-    for _c in ('surface_m2', 'capex_annuel (k€)', 'gop (k€)'):
+    for _c in ('surface_m2', 'gop (k€)'):
         cap_input[_c] = pd.to_numeric(cap_input[_c], errors='coerce').fillna(0.0).astype(float)
+    # CAPEX : NaN = non renseigné (pas de fillna(0) — un CAPEX nul fausserait la frontière)
+    cap_input['capex_annuel (k€)'] = pd.to_numeric(cap_input['capex_annuel (k€)'], errors='coerce').astype(float)
     st.session_state['capital_input'] = cap_input
 
     # ── Export du tableau tel que saisi ─────────────────────────────────────
@@ -4989,7 +5080,7 @@ with tab_capital:
             gop_ke   = float(row['gop (k€)']);   stars    = int(row['classement (★)'])
             lits = float(dea.df.loc[hotel, 'nb_chambres']) if dea.has_chambres else None
             goppam   = round(gop_ke * 1000 / surf, 2)    if surf > 0    else None
-            capex_ch = round(capex_ke * 1000 / lits, 0)  if lits else None
+            capex_ch = round(capex_ke * 1000 / lits, 0)  if (lits and pd.notna(capex_ke) and capex_ke > 0) else None
             # CA : exige un vrai nombre de chambres ou un total_revenue réel —
             # plus de repli automatique, cf. audit portefeuille compset générique
             # (rapport chambres/lits de 1:1 à 7:1 selon l'hôtel).
@@ -5166,6 +5257,8 @@ with tab_capital:
                     _cap_df.loc[_hotel, 'surface_m2'] = float(_surf)
                 if pd.notna(_capex) and _capex > 0:
                     _cap_df.loc[_hotel, 'capex_annuel'] = float(_capex) * 1000.0
+                else:
+                    _cap_df.loc[_hotel, 'capex_annuel'] = np.nan   # non renseigné (≠ 0)
                 if pd.notna(_gop) and _gop > 0:
                     _cap_df.loc[_hotel, 'gop'] = float(_gop) * 1000.0
     
@@ -5176,8 +5269,33 @@ with tab_capital:
             dea.has_capex   = 'capex_annuel' in _cap_df.columns and _cap_df['capex_annuel'].sum() > 0
             dea.has_gop     = 'gop' in _cap_df.columns and _cap_df['gop'].sum() > 0
     
-            _cap_dea_df = dea.compute_capital_dea()
+            _cap_dea_df, _cap_excluded = run_capital_dea_excluding_missing_capex(dea, _cap_df)
             dea.df = _dea_df_orig  # restaurer
+
+            # Annotation des hôtels exclus (CAPEX non renseigné) + plan input-oriented (BCC < seuil, CAPEX renseigné)
+            _sel_in = pd.DataFrame({
+                'hotel_name': list(dea.hotels),
+                'bcc'       : [dea.bcc_scores.get(h) for h in dea.hotels],
+                'Capex'     : _cap_df.reindex(dea.hotels)['capex_annuel'].values,
+            }, index=list(dea.hotels))
+            _plan_in, _sel_ann = select_inefficient_units_input_oriented(
+                _sel_in,
+                criteria={'capex_col': 'Capex', 'columns': {'bcc': 'lower_is_worse'}},
+                thresholds={'bcc': SEUIL_CRITIQUE},
+                n_units=len(dea.hotels),
+            )
+            missing = _sel_ann[_sel_ann['_selection_reason'] == CAPITAL_MISSING_CAPEX_LABEL]
+            if not missing.empty:
+                st.info(
+                    f"{len(missing)} hôtel(s) exclu(s) de l'analyse Capital : {CAPITAL_MISSING_CAPEX_LABEL} — "
+                    + ", ".join(missing['hotel_name'].tolist())
+                )
+            if orientation_mode == 'input' and not _plan_in.empty:
+                st.markdown(f"**Plan de restructuration (input-oriented)** — BCC < {SEUIL_CRITIQUE:.0%}, CAPEX renseigné")
+                st.dataframe(
+                    _plan_in[['hotel_name', 'bcc', 'Capex', '_selection_reason']].rename(columns={
+                        'hotel_name': 'Hôtel', 'bcc': 'BCC', 'Capex': 'CAPEX annuel (€)', '_selection_reason': 'Critère'}),
+                    use_container_width=True, hide_index=True)
     
             if _cap_dea_df is not None and not _cap_dea_df.empty:
                 st.dataframe(_cap_dea_df, use_container_width=True, hide_index=True)
@@ -5987,9 +6105,9 @@ sont automatiquement mappées vers les noms standard des modules.*
             _diag_rows = []
             for h in dea.hotels:
                 _bcc_h = dea.bcc_scores.get(h, 1.0)
-                if _bcc_h >= 0.85:
+                if _bcc_h >= SEUIL_CRITIQUE:
                     continue
-                _weak_dims = [lbl for lbl, sc in _dim_scores.items() if sc.get(h) is not None and sc[h] < 0.85]
+                _weak_dims = [lbl for lbl, sc in _dim_scores.items() if sc.get(h) is not None and sc[h] < SEUIL_CRITIQUE]
                 if not _weak_dims:
                     continue
                 _row = {'Hôtel': h, 'BCC (opérationnel)': f"{_bcc_h:.1%}"}
@@ -6007,7 +6125,7 @@ sont automatiquement mappées vers les noms standard des modules.*
             if _diag_rows:
                 _n_multi = sum(1 for r in _diag_rows if len(r['Dimensions en cause'].split(', ')) >= 2)
                 st.warning(
-                    f"{len(_diag_rows)} hôtel(s) critique(s) en BCC (<85%) montrent aussi une "
+                    f"{len(_diag_rows)} hôtel(s) critique(s) en BCC (<{SEUIL_CRITIQUE:.0%}) montrent aussi une "
                     f"faiblesse identifiable sur au moins une autre dimension"
                     + (f", dont {_n_multi} sur plusieurs dimensions à la fois — signal de "
                        f"problème structurel, pas d'un simple ajustement opérationnel."
